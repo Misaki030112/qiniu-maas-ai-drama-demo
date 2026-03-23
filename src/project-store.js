@@ -126,6 +126,20 @@ function derivePropsFromAdaptation(adaptation) {
   return uniqBy(props, (item) => item.name);
 }
 
+function mapReferenceImages(projectId, items = []) {
+  return (items || []).map((item) => {
+    if (!item) {
+      return null;
+    }
+    const imagePath = item.path || item.imagePath || "";
+    return {
+      ...item,
+      path: imagePath,
+      url: imagePath ? `/api/projects/${projectId}/artifacts/${imagePath}` : item.url || "",
+    };
+  }).filter(Boolean);
+}
+
 export function normalizeCharacterStagePayload(payload, adaptation = null) {
   const source = payload && typeof payload === "object" ? payload : {};
   return {
@@ -516,7 +530,48 @@ export async function invalidateProject(project, fromStage) {
     await fs.rm(path.join(paths.outputDir, dirName), { recursive: true, force: true });
   }
 
-  await fs.rm(paths.manifestPath, { force: true });
+  if (fromStage === "story") {
+    await fs.rm(paths.manifestPath, { force: true });
+  } else {
+    const manifest = await readOptionalJson(paths.manifestPath);
+    if (manifest) {
+      const dropStages = new Set(affectedStages);
+      manifest.stages = (manifest.stages || []).filter((item) => !dropStages.has(item.stage));
+
+      for (const stage of affectedStages) {
+        if (stage === "storyboard") {
+          delete manifest.outputs?.storyboard;
+        }
+        if (stage === "media") {
+          delete manifest.outputs?.subtitles;
+          manifest.shots = [];
+        }
+        if (stage === "output") {
+          delete manifest.outputs?.outputVideo;
+          delete manifest.runSummary?.videoStage;
+          delete manifest.completedAt;
+        }
+        if (stage === "video") {
+          delete manifest.outputs?.videoOutput;
+          delete manifest.runSummary?.videoStage;
+        }
+        if (stage === "characters") {
+          delete manifest.outputs?.characters;
+          manifest.subjectReferences = [];
+          manifest.roleReferences = [];
+        }
+        if (stage === "adaptation") {
+          delete manifest.outputs?.adaptation;
+          manifest.subjectReferences = [];
+          manifest.roleReferences = [];
+          manifest.shots = [];
+        }
+      }
+
+      await writeJson(paths.manifestPath, manifest);
+    }
+  }
+
   await fs.rm(paths.modelMatrixPath, { force: true });
   await ensureProjectWorkspace(project.id);
 
@@ -640,6 +695,18 @@ export async function readProjectDetail(projectId) {
   const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
   const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
   const normalizedCharacters = normalizeCharacterStagePayload(characters, adaptation);
+  normalizedCharacters.characters = normalizedCharacters.characters.map((item) => ({
+    ...item,
+    reference_images: mapReferenceImages(projectId, item.reference_images),
+  }));
+  normalizedCharacters.scenes = normalizedCharacters.scenes.map((item) => ({
+    ...item,
+    reference_images: mapReferenceImages(projectId, item.reference_images),
+  }));
+  normalizedCharacters.props = normalizedCharacters.props.map((item) => ({
+    ...item,
+    reference_images: mapReferenceImages(projectId, item.reference_images),
+  }));
   const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
   const subtitles = await readOptionalText(path.join(paths.dirs.subtitles, "subtitles.srt"));
   const subjectReferences = (manifest?.subjectReferences || manifest?.roleReferences || []).map((item) => ({

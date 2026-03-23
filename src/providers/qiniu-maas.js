@@ -1,5 +1,5 @@
 import { extractJson, normalizeChatText } from "../utils.js";
-import { resolveImagePayload } from "./image-runtime.js";
+import { buildImageRequest, resolveImagePayload } from "./image-runtime.js";
 import { buildVideoTaskBody, parseVideoTaskResult } from "./video-runtime.js";
 
 export class QiniuMaaSClient {
@@ -61,14 +61,18 @@ export class QiniuMaaSClient {
     };
   }
 
-  async generateImage({ model, prompt }) {
-    const response = await fetch(`${this.baseUrl}/images/generations`, {
+  async generateImage({ model, prompt, aspectRatio = "16:9", referenceImages = [] }) {
+    const request = buildImageRequest({
+      model,
+      prompt,
+      aspectRatio,
+      referenceImages,
+    });
+
+    const response = await fetch(`${this.baseUrl}${request.endpoint}`, {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({
-        model,
-        prompt,
-      }),
+      body: JSON.stringify(request.body),
     });
 
     const payload = await response.json();

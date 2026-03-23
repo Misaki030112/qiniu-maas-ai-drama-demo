@@ -543,7 +543,6 @@ function SubjectGrid({
                 {ref?.url ? (
                   <>
                     <img src={ref.url} alt={item.name} />
-                    <span className="studio-subject-card__badge">{ref.model || "已生成"}</span>
                   </>
                 ) : <div className="studio-subject-card__placeholder">{kind === "character" ? "角色" : kind === "scene" ? "场景" : "道具"}</div>}
               </div>
@@ -945,6 +944,63 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function appendReferenceImage(image) {
+    if (!currentSubject) {
+      return;
+    }
+    updateSubjectList((draft) => {
+      const index = draft[currentKindConfig.key].findIndex((item) => item.name === selectedSubjectKey);
+      if (index === -1) {
+        return;
+      }
+      draft[currentKindConfig.key][index].reference_images = [
+        ...(draft[currentKindConfig.key][index].reference_images || []),
+        image,
+      ];
+    });
+    setMessage("参考图已加入当前主体，记得保存或直接生成。");
+  }
+
+  function removeReferenceImage(imagePath) {
+    updateSubjectList((draft) => {
+      const index = draft[currentKindConfig.key].findIndex((item) => item.name === selectedSubjectKey);
+      if (index === -1) {
+        return;
+      }
+      draft[currentKindConfig.key][index].reference_images = (draft[currentKindConfig.key][index].reference_images || [])
+        .filter((item) => item.path !== imagePath);
+    });
+    setMessage("已移除参考图，记得保存。");
+  }
+
+  function uploadReferenceImage(file) {
+    if (!file || !currentSubject) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在上传参考图");
+        const form = new FormData();
+        form.append("file", file);
+        form.append("kind", subjectKind);
+        form.append("name", currentSubject.name || "subject");
+        const res = await fetch(`/api/projects/${projectId}/subjects/reference-images`, {
+          method: "POST",
+          body: form,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "上传参考图失败");
+        }
+        appendReferenceImage(data);
+      } catch (error) {
+        setMessage(error.message || "上传失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
   function saveCurrentSubject(regenerate = false) {
     startTransition(async () => {
       try {
@@ -1270,6 +1326,38 @@ export function ProjectWorkbench({ projectId }) {
                       <button className="studio-primary" type="button" onClick={() => saveCurrentSubject(true)} disabled={busy}>
                         生成当前项图片
                       </button>
+                    </div>
+                    <div className="studio-field">
+                      <span>参考图片</span>
+                      <div className="studio-reference-grid">
+                        <label className="studio-reference-upload">
+                          <input
+                            className="studio-reference-upload__input"
+                            type="file"
+                            accept="image/png,image/jpeg,image/jpg"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              if (file) {
+                                uploadReferenceImage(file);
+                                event.target.value = "";
+                              }
+                            }}
+                          />
+                          <span className="studio-reference-upload__plus">+</span>
+                          <span className="studio-reference-upload__label">图片</span>
+                        </label>
+                        {(currentSubject.reference_images || []).map((item) => (
+                          <div key={item.path || item.url} className="studio-reference-tile">
+                            <button type="button" className="studio-reference-tile__preview" onClick={() => openPreview(item, item.name || currentSubject.name)}>
+                              <img src={item.url} alt={item.name || "reference"} />
+                            </button>
+                            <div className="studio-reference-tile__actions">
+                              <button type="button" onClick={() => openPreview(item, item.name || currentSubject.name)}>查看</button>
+                              <button type="button" onClick={() => removeReferenceImage(item.path)}>移除</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ) : (

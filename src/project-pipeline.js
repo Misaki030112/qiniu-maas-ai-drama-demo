@@ -260,12 +260,41 @@ function subjectStem(subject, defaultName) {
   return String(subject.name || defaultName).replaceAll(/\s+/g, "_");
 }
 
+function imageMimeFromPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+  }[ext] || "image/png";
+}
+
+async function buildSubjectReferenceInputs(paths, items = []) {
+  const results = [];
+  for (const item of items) {
+    if (!item?.path) {
+      continue;
+    }
+    const absolutePath = path.join(paths.outputDir, item.path);
+    const buffer = await fs.readFile(absolutePath);
+    const mimeType = imageMimeFromPath(absolutePath);
+    results.push({
+      ...item,
+      base64: buffer.toString("base64"),
+      dataUri: `data:${mimeType};base64,${buffer.toString("base64")}`,
+    });
+  }
+  return results;
+}
+
 async function renderSubjectReference({ client, model, subject, kind, paths, index, logger }) {
   const safeName = subjectStem(subject, `${kind}_${index + 1}`);
   const prompt = buildSubjectPrompt(subject, kind);
   await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
 
   const imagePath = `${safeName}.png`;
+  const referenceImages = await buildSubjectReferenceInputs(paths, subject.reference_images || []);
   const image = logger
     ? await logger.measure(
         {
@@ -277,11 +306,15 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
         () => client.generateImage({
           model,
           prompt,
+          aspectRatio: "16:9",
+          referenceImages,
         }),
       )
     : await client.generateImage({
         model,
         prompt,
+        aspectRatio: "16:9",
+        referenceImages,
       });
   await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
   await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {

@@ -709,17 +709,6 @@ audio {
   background: #0f1216;
 }
 
-.studio-subject-card__badge {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(17, 20, 25, 0.9);
-  color: var(--text);
-  font-size: 11px;
-}
-
 .studio-subject-card__placeholder {
   width: 100%;
   height: 100%;
@@ -1006,6 +995,105 @@ audio {
   color: var(--danger) !important;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.studio-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 132px));
+  gap: 14px;
+}
+
+.studio-reference-upload,
+.studio-reference-tile {
+  display: grid;
+  gap: 8px;
+}
+
+.studio-reference-upload {
+  position: relative;
+  width: 132px;
+}
+
+.studio-reference-upload__input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.studio-reference-upload__plus,
+.studio-reference-upload__label {
+  pointer-events: none;
+}
+
+.studio-reference-upload::before {
+  content: "";
+  display: block;
+  width: 132px;
+  height: 132px;
+  border-radius: 18px;
+  background: #3b3d42;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  transition: 0.18s ease;
+}
+
+.studio-reference-upload {
+  align-items: center;
+  justify-items: center;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+}
+
+.studio-reference-upload:hover::before {
+  border-color: rgba(147, 239, 59, 0.28);
+  background: #404349;
+}
+
+.studio-reference-upload__plus {
+  position: absolute;
+  top: 36px;
+  font-size: 36px;
+  line-height: 1;
+  font-weight: 300;
+}
+
+.studio-reference-upload__label {
+  position: absolute;
+  top: 78px;
+  font-size: 16px;
+}
+
+.studio-reference-tile__preview {
+  width: 132px;
+  height: 132px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 18px;
+  padding: 0;
+  background: #25292f;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.studio-reference-tile__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0f1216;
+}
+
+.studio-reference-tile__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.studio-reference-tile__actions button {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 0;
+  cursor: pointer;
 }
 
 .studio-spinner {
