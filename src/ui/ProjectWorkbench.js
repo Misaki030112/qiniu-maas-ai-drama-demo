@@ -110,6 +110,253 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (!/[",\n]/.test(text)) {
+    return text;
+  }
+  return `"${text.replaceAll("\"", "\"\"")}"`;
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let current = "";
+  let row = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        current += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(current);
+      current = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(current);
+      current = "";
+      if (row.some((item) => item !== "")) {
+        rows.push(row);
+      }
+      row = [];
+      continue;
+    }
+
+    current += char;
+  }
+
+  row.push(current);
+  if (row.some((item) => item !== "")) {
+    rows.push(row);
+  }
+  return rows;
+}
+
+function createEmptyStoryboardItem(groupIndex, itemIndex) {
+  const shotNo = `${groupIndex + 1}-${itemIndex + 1}`;
+  return {
+    item_id: shotNo,
+    shot_no: shotNo,
+    scene_name: "",
+    shot_size: "",
+    composition: "",
+    camera_move: "",
+    lighting: "",
+    shot_description: "",
+    sound_fx: "",
+    dialogue: "",
+    duration_sec: 4,
+    speaker: "",
+    image_prompt: "",
+    video_prompt: "",
+    negative_prompt: "",
+  };
+}
+
+function normalizeImportedStoryboard(payload) {
+  const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+  const normalizedGroups = groups.map((group, groupIndex) => {
+    const items = Array.isArray(group?.items) && group.items.length
+      ? group.items.map((item, itemIndex) => ({
+          ...createEmptyStoryboardItem(groupIndex, itemIndex),
+          ...item,
+          item_id: item?.item_id || item?.shot_no || `${groupIndex + 1}-${itemIndex + 1}`,
+          shot_no: item?.shot_no || item?.item_id || `${groupIndex + 1}-${itemIndex + 1}`,
+          duration_sec: Number(item?.duration_sec || 4),
+        }))
+      : [createEmptyStoryboardItem(groupIndex, 0)];
+
+    return {
+      group_id: group?.group_id || `group_${groupIndex + 1}`,
+      title: group?.title || `镜头${groupIndex + 1}`,
+      source_text: group?.source_text || "",
+      order_index: Number(group?.order_index ?? groupIndex),
+      collapsed: Boolean(group?.collapsed),
+      items,
+    };
+  });
+
+  return {
+    style_guide: payload?.style_guide || {},
+    groups: normalizedGroups,
+    shots: normalizedGroups.flatMap((group) =>
+      group.items.map((item) => ({
+        shot_id: item.item_id,
+        scene_id: group.group_id,
+        title: group.title,
+        camera: item.camera_move,
+        visual_focus: item.shot_description,
+        transition: "",
+        speaker: item.speaker || "旁白",
+        line: item.dialogue || "",
+        subtitle: item.dialogue || "",
+        duration_sec: Number(item.duration_sec || 4),
+        image_prompt: item.image_prompt || item.shot_description || "",
+        video_prompt: item.video_prompt || item.shot_description || "",
+        negative_prompt: item.negative_prompt || "",
+      })),
+    ),
+  };
+}
+
+function buildStoryboardRows(storyboard) {
+  const groups = storyboard?.groups || [];
+  return groups.flatMap((group, groupIndex) =>
+    (group.items || []).map((item, itemIndex) => ({
+      group_title: group.title || `镜头${groupIndex + 1}`,
+      source_text: group.source_text || "",
+      shot_no: item.shot_no || `${groupIndex + 1}-${itemIndex + 1}`,
+      scene_name: item.scene_name || "",
+      shot_size: item.shot_size || "",
+      composition: item.composition || "",
+      camera_move: item.camera_move || "",
+      lighting: item.lighting || "",
+      shot_description: item.shot_description || "",
+      sound_fx: item.sound_fx || "",
+      dialogue: item.dialogue || "",
+      speaker: item.speaker || "",
+      duration_sec: item.duration_sec || 4,
+      image_prompt: item.image_prompt || "",
+      video_prompt: item.video_prompt || "",
+      negative_prompt: item.negative_prompt || "",
+    })),
+  );
+}
+
+function serializeStoryboardCsv(storyboard) {
+  const headers = [
+    ["镜头组", "group_title"],
+    ["剧情原句", "source_text"],
+    ["分镜号", "shot_no"],
+    ["场景", "scene_name"],
+    ["景别", "shot_size"],
+    ["构图", "composition"],
+    ["运镜", "camera_move"],
+    ["光影", "lighting"],
+    ["分镜描述", "shot_description"],
+    ["音效", "sound_fx"],
+    ["对白", "dialogue"],
+    ["说话人", "speaker"],
+    ["时长", "duration_sec"],
+    ["静帧提示词", "image_prompt"],
+    ["视频提示词", "video_prompt"],
+    ["负向提示词", "negative_prompt"],
+  ];
+
+  const lines = [
+    headers.map(([label]) => csvEscape(label)).join(","),
+    ...buildStoryboardRows(storyboard).map((row) =>
+      headers.map(([, key]) => csvEscape(row[key])).join(","),
+    ),
+  ];
+  return "\uFEFF" + lines.join("\n");
+}
+
+function storyboardFromCsv(text) {
+  const rows = parseCsv(text.trim());
+  if (rows.length < 2) {
+    throw new Error("导入文件为空");
+  }
+
+  const headerMap = {
+    镜头组: "group_title",
+    剧情原句: "source_text",
+    分镜号: "shot_no",
+    场景: "scene_name",
+    景别: "shot_size",
+    构图: "composition",
+    运镜: "camera_move",
+    光影: "lighting",
+    分镜描述: "shot_description",
+    音效: "sound_fx",
+    对白: "dialogue",
+    说话人: "speaker",
+    时长: "duration_sec",
+    静帧提示词: "image_prompt",
+    视频提示词: "video_prompt",
+    负向提示词: "negative_prompt",
+  };
+
+  const headers = rows[0].map((item) => headerMap[item.trim()] || item.trim());
+  const groupMap = new Map();
+
+  for (const row of rows.slice(1)) {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index] || "";
+    });
+
+    const groupTitle = record.group_title || `镜头${groupMap.size + 1}`;
+    const groupKey = `${groupTitle}__${record.source_text || ""}`;
+    if (!groupMap.has(groupKey)) {
+      groupMap.set(groupKey, {
+        group_id: `group_${groupMap.size + 1}`,
+        title: groupTitle,
+        source_text: record.source_text || "",
+        order_index: groupMap.size,
+        collapsed: false,
+        items: [],
+      });
+    }
+
+    const group = groupMap.get(groupKey);
+    group.items.push({
+      item_id: record.shot_no || `${groupMap.size}-${group.items.length + 1}`,
+      shot_no: record.shot_no || `${groupMap.size}-${group.items.length + 1}`,
+      scene_name: record.scene_name || "",
+      shot_size: record.shot_size || "",
+      composition: record.composition || "",
+      camera_move: record.camera_move || "",
+      lighting: record.lighting || "",
+      shot_description: record.shot_description || "",
+      sound_fx: record.sound_fx || "",
+      dialogue: record.dialogue || "",
+      speaker: record.speaker || "",
+      duration_sec: Number(record.duration_sec || 4),
+      image_prompt: record.image_prompt || "",
+      video_prompt: record.video_prompt || "",
+      negative_prompt: record.negative_prompt || "",
+    });
+  }
+
+  return normalizeImportedStoryboard({ groups: [...groupMap.values()] });
+}
+
 function StatusDot({ status }) {
   return <span className={`studio-status-dot ${status || "idle"}`} />;
 }
@@ -273,6 +520,14 @@ function SideList({ tab, project }) {
   );
 }
 
+function EllipsisText({ value, className = "" }) {
+  return (
+    <span className={className} title={value || "-"}>
+      {value || "-"}
+    </span>
+  );
+}
+
 function ScriptSummary({ adaptation }) {
   return (
     <div className="studio-structured">
@@ -297,6 +552,8 @@ function ScriptSummary({ adaptation }) {
 function StoryboardBoard({
   storyboard,
   selectedItemId,
+  onImport,
+  onExport,
   onSelectItem,
   onToggleGroup,
   onAddGroup,
@@ -315,8 +572,8 @@ function StoryboardBoard({
           <span>按镜头组组织分镜条目，结构更接近制作工作台。</span>
         </div>
         <div className="studio-inline-actions">
-          <button type="button" disabled>导入分镜表</button>
-          <button type="button" disabled>导出分镜表</button>
+          <button type="button" onClick={onImport}>导入分镜表</button>
+          <button type="button" onClick={onExport}>导出分镜表</button>
         </div>
       </div>
       {groups.map((group, groupIndex) => (
@@ -334,39 +591,59 @@ function StoryboardBoard({
           </div>
           {!group.collapsed ? (
             <>
-              <div className="studio-storyboard-table studio-storyboard-table--head">
-                <span>分镜号</span>
-                <span>场景</span>
-                <span>景别</span>
-                <span>构图</span>
-                <span>运镜</span>
-                <span>光影</span>
-                <span>分镜描述</span>
-                <span>音效</span>
-                <span>对白</span>
-                <span>时长</span>
-                <span>操作</span>
-              </div>
-              {(group.items || []).map((item) => (
-                <div key={item.item_id} className={item.item_id === selectedItemId ? "studio-storyboard-table active" : "studio-storyboard-table"}>
-                  <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--index" onClick={() => onSelectItem(item.item_id)}>
-                    {item.shot_no || item.item_id}
-                  </button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.scene_name || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.shot_size || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.composition || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.camera_move || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.lighting || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--wide" onClick={() => onSelectItem(item.item_id)}>{item.shot_description || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.sound_fx || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.dialogue || "-"}</button>
-                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{Number(item.duration_sec || 0)}s</button>
-                  <div className="studio-inline-actions">
-                    <button type="button" onClick={() => onDuplicateItem(group.group_id, item.item_id)}>复制</button>
-                    <button type="button" onClick={() => onDeleteItem(group.group_id, item.item_id)}>删除</button>
-                  </div>
+              <div className="studio-storyboard-scroll">
+                <div className="studio-storyboard-table studio-storyboard-table--head">
+                  <span>分镜号</span>
+                  <span>场景</span>
+                  <span>景别</span>
+                  <span>构图</span>
+                  <span>运镜</span>
+                  <span>光影</span>
+                  <span>分镜描述</span>
+                  <span>音效</span>
+                  <span>对白</span>
+                  <span>时长</span>
+                  <span>操作</span>
                 </div>
-              ))}
+                {(group.items || []).map((item) => (
+                  <div key={item.item_id} className={item.item_id === selectedItemId ? "studio-storyboard-table active" : "studio-storyboard-table"}>
+                    <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--index" onClick={() => onSelectItem(item.item_id)}>
+                      {item.shot_no || item.item_id}
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.scene_name} />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.shot_size} />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.composition} />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.camera_move} />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--text" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.lighting} className="studio-storyboard-clamp studio-storyboard-clamp--2" />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--wide" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.shot_description} className="studio-storyboard-clamp studio-storyboard-clamp--3" />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--text" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.sound_fx} className="studio-storyboard-clamp studio-storyboard-clamp--2" />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--text" onClick={() => onSelectItem(item.item_id)}>
+                      <EllipsisText value={item.dialogue} className="studio-storyboard-clamp studio-storyboard-clamp--2" />
+                    </button>
+                    <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--time" onClick={() => onSelectItem(item.item_id)}>
+                      {Number(item.duration_sec || 0)}s
+                    </button>
+                    <div className="studio-inline-actions">
+                      <button type="button" onClick={() => onDuplicateItem(group.group_id, item.item_id)}>复制</button>
+                      <button type="button" onClick={() => onDeleteItem(group.group_id, item.item_id)}>删除</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
               <button type="button" className="studio-storyboard-add" onClick={() => onAddItem(group.group_id)}>
                 + 添加分镜
               </button>
@@ -858,8 +1135,10 @@ export function ProjectWorkbench({ projectId }) {
   const [charactersDraft, setCharactersDraft] = useState(null);
   const [storyboardDraft, setStoryboardDraft] = useState(null);
   const [selectedStoryboardItemId, setSelectedStoryboardItemId] = useState("");
+  const [sideCollapsed, setSideCollapsed] = useState(true);
   const [isPending, startTransition] = useTransition();
   const bootedRef = useRef(false);
+  const storyboardImportRef = useRef(null);
 
   async function loadProject(options = {}) {
     const { preserveTab = true } = options;
@@ -1381,6 +1660,57 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function handleStoryboardExport() {
+    try {
+      const csv = serializeStoryboardCsv(storyboardDraft);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${project?.name || "storyboard"}-分镜表.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMessage("分镜表已导出");
+    } catch (error) {
+      setMessage(error.message || "导出失败");
+    }
+  }
+
+  function handleStoryboardImportClick() {
+    storyboardImportRef.current?.click();
+  }
+
+  function handleStoryboardImport(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || "");
+        const imported = file.name.endsWith(".json")
+          ? normalizeImportedStoryboard(JSON.parse(text))
+          : storyboardFromCsv(text);
+        setStoryboardDraft(imported);
+        setSelectedStoryboardItemId(imported.groups?.[0]?.items?.[0]?.item_id || "");
+        setMessage("分镜表已导入，记得保存。");
+      } catch (error) {
+        setMessage(error.message || "导入失败");
+      } finally {
+        event.target.value = "";
+      }
+    };
+    reader.onerror = () => {
+      setMessage("读取文件失败");
+      event.target.value = "";
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
   if (!project) {
     return <div className="project-loading">加载中</div>;
   }
@@ -1423,9 +1753,21 @@ export function ProjectWorkbench({ projectId }) {
         </div>
       </header>
 
-      <div className="studio-body studio-body--workspace">
-        <aside className="studio-side">
-          <SideList tab={tab} project={project} />
+      <div className={sideCollapsed ? "studio-body studio-body--workspace studio-body--side-collapsed" : "studio-body studio-body--workspace"}>
+        <aside className={sideCollapsed ? "studio-side studio-side--collapsed" : "studio-side"}>
+          <div className="studio-side__tools">
+            <button
+              type="button"
+              className="studio-side__toggle"
+              onClick={() => setSideCollapsed((current) => !current)}
+              title={sideCollapsed ? "展开左侧目录" : "收起左侧目录"}
+              aria-label={sideCollapsed ? "展开左侧目录" : "收起左侧目录"}
+            >
+              {sideCollapsed ? "›" : "‹"}
+            </button>
+            {!sideCollapsed ? <span className="studio-side__label">章节目录</span> : null}
+          </div>
+          {!sideCollapsed ? <SideList tab={tab} project={project} /> : null}
         </aside>
 
         <main className="studio-main">
@@ -1486,6 +1828,8 @@ export function ProjectWorkbench({ projectId }) {
               <StoryboardBoard
                 storyboard={storyboardDraft}
                 selectedItemId={selectedStoryboardItemId}
+                onImport={handleStoryboardImportClick}
+                onExport={handleStoryboardExport}
                 onSelectItem={setSelectedStoryboardItemId}
                 onToggleGroup={toggleStoryboardGroup}
                 onAddGroup={addStoryboardGroup}
@@ -1851,6 +2195,13 @@ export function ProjectWorkbench({ projectId }) {
       ) : null}
 
       <ImagePreviewModal asset={previewAsset} onClose={() => setPreviewAsset(null)} />
+      <input
+        ref={storyboardImportRef}
+        hidden
+        type="file"
+        accept=".csv,.json,text/csv,application/json"
+        onChange={handleStoryboardImport}
+      />
     </section>
   );
 }
