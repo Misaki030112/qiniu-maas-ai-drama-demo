@@ -97,85 +97,144 @@ function uniqueNamesFromText(text) {
   return uniq.slice(0, 2);
 }
 
+function inferStyleFromAdaptation(adaptation) {
+  return adaptation?.style_preset || "写实";
+}
+
+function inferSceneName(adaptation, index) {
+  const sceneHint = adaptation?.subject_hints?.scenes?.[index];
+  if (typeof sceneHint === "string" && sceneHint.trim()) {
+    return sceneHint.trim();
+  }
+  if (sceneHint?.name) {
+    return sceneHint.name;
+  }
+  return `核心场景${index + 1}`;
+}
+
+function inferPropName(adaptation, index) {
+  const propHint = adaptation?.subject_hints?.props?.[index];
+  if (typeof propHint === "string" && propHint.trim()) {
+    return propHint.trim();
+  }
+  if (propHint?.name) {
+    return propHint.name;
+  }
+  return `关键道具${index + 1}`;
+}
+
+function buildProfessionalCharacterDescription({
+  name,
+  gender,
+  age,
+  wardrobe,
+  hairstyle,
+  face,
+  figure,
+  accessories,
+  style,
+}) {
+  const genderText = gender === "male" ? "男性" : gender === "female" ? "女性" : "人物";
+  return [
+    `8K画质，${style}风格，电影级摄影`,
+    `${age}${genderText}，${figure}，${hairstyle}，${face}`,
+    `${wardrobe}${accessories ? `，${accessories}` : ""}`,
+    "左区：角色正脸特写，面部占满左区，五官、发型、配饰清晰，无身体入镜、无遮挡变形",
+    "右区：标准角色设定三视图，横向排列侧视图、正视图、背视图，从头到脚完整无遮挡",
+    "核心约束：特写与三视图为同一角色，五官、服装、配饰、体态100%一致",
+    "背景要求：干净纯色或浅灰背景，角色无多余干扰元素",
+    "摄影要求：统一85mm焦距，平视，无畸变",
+    "状态要求：无剧烈动作，中性或克制表情，自然站立，双手自然下垂，无手持物",
+  ].join("；");
+}
+
 function buildFallbackCharacters(adaptation) {
   const source = JSON.stringify(adaptation);
   const [nameA = "主角甲", nameB = "主角乙"] = uniqueNamesFromText(source);
+  const style = inferStyleFromAdaptation(adaptation);
   return {
     characters: [
       {
         name: nameA,
-        role: "内容负责人",
+        role: "核心角色A",
         gender: "female",
         age_range: "28-35",
-        personality: ["强势", "目标导向", "对结果敏感"],
-        appearance: "都市职业女性，利落长发或低马尾，深色西装或衬衫，状态紧绷但有执行力。",
-        wardrobe: "炭灰色西装外套，米白色真丝衬衫，同色系西装裤，黑色尖头高跟鞋，简约银色腕表。",
-        visual_anchor: ["低扎马尾", "炭灰色西装", "冷静压迫感"],
-        full_description:
-          `8K画质，真实皮肤质感，超写实，电影级摄影；30岁上下中国女性，身高约1.68米，体型匀称，低扎马尾，深棕色直发，鹅蛋脸，柳叶眉，杏眼，鼻梁挺直，自然唇色，自然肤色；身穿炭灰色西装外套，内搭米白色真丝衬衫，下装为同色系西装裤，脚穿黑色哑光尖头高跟鞋，佩戴简约银色方形腕表；左区：角色正脸特写，面部占满画面左区，五官、发型、配饰清晰，无身体入镜、无遮挡变形；右区：标准角色设定三视图，横向排列侧视图、正视图、背视图，从头到脚完整无遮挡；核心约束：特写与三视图为同一角色，五官、服装、配饰、体态100%一致；浅灰色背景，无阴影，85mm焦距，无畸变，无动作，平视，中性表情，双手自然下垂，空手。`,
-        reference_prompt:
-          `8K画质，超写实真人女性角色设定图，${nameA}，炭灰色西装，低扎马尾，左区正脸特写，右区三视图，浅灰背景，85mm焦距，无动作，中性表情，同一角色保持完全一致。`,
+        personality: ["果断", "目标明确", "压住情绪推进结果"],
+        appearance: "主角型女性，造型干净利落，强调辨识度与镜头稳定性。",
+        wardrobe: "主色统一的成套服装，剪裁清晰，适合跨镜头稳定复用。",
+        visual_anchor: ["主造型清晰", "脸部辨识度高", "服装轮廓稳定"],
+        full_description: buildProfessionalCharacterDescription({
+          name: nameA,
+          gender: "female",
+          age: "28至35岁",
+          wardrobe: "服装为统一主色调的成套造型，版型利落，鞋履与配饰风格统一",
+          hairstyle: "发型整洁，发丝走向清晰，适合长时间连续出镜",
+          face: "脸型与五官比例稳定，眉眼鼻唇特征明确，肤质细节自然",
+          figure: "体型匀称，身高比例自然",
+          accessories: "可带一到两件稳定配饰用于角色识别",
+          style,
+        }),
+        reference_prompt: `${nameA}，${style}风格专业角色设定图，左区正脸特写，右区标准三视图，同一角色一致性严格锁定。`,
         continuity_prompt:
-          `${nameA}，都市职业女性，深色西装，利落发型，写实真人短剧风格，情绪克制但有压迫感。`,
-        negative_prompt: "卡通感、古装、妆容过重、夸张饰品、多人入镜、畸形手脚、年龄漂移、服装漂移",
-        voice_style: "冷静、克制、带压力感",
+          `${nameA}，${style}风格，角色主造型稳定，脸部特征、发型、服装轮廓和配饰保持一致。`,
+        negative_prompt: "卡通感、设定稿崩坏、三视图不统一、多人入镜、畸形手脚、年龄漂移、服装漂移",
+        voice_style: "克制、清晰、有识别度",
       },
       {
         name: nameB,
-        role: "AI 产品 / 技术负责人",
+        role: "核心角色B",
         gender: "male",
         age_range: "26-33",
-        personality: ["理性", "抗压", "执行快"],
-        appearance: "年轻男性，简单衬衫或卫衣，略疲惫但专注，职场夜战状态。",
-        wardrobe: "藏蓝色或深灰色连帽卫衣，深灰色休闲长裤，白色帆布鞋。",
-        visual_anchor: ["黑眼圈", "深色卫衣", "疲惫但专注"],
-        full_description:
-          `8K画质，真实皮肤质感，超写实，电影级摄影；29岁中国男性，身高约1.80米，体型偏瘦，短发，深棕色头发，国字脸，单眼皮，薄唇，鼻梁高挺，眼下有乌青，自然肤色；身穿藏蓝色宽松连帽卫衣，下装为深灰色休闲长裤，脚穿白色帆布鞋；左区：角色正脸特写，面部占满左区，五官、发型清晰，无身体入镜、无遮挡变形；右区：标准角色设定三视图，横向排列侧视图、正视图、背视图，从头到脚完整无遮挡；核心约束：特写与三视图为同一角色，五官、服装、体态100%一致；浅灰色背景，无阴影，85mm焦距，无畸变，无动作，平视，中性表情，双手自然下垂，空手。`,
-        reference_prompt:
-          `8K画质，超写实真人男性角色设定图，${nameB}，深色连帽卫衣，短发，轻微黑眼圈，左区正脸特写，右区三视图，浅灰背景，85mm焦距，无动作，中性表情。`,
+        personality: ["冷静", "理性", "执行稳定"],
+        appearance: "主角型男性，面部识别点明确，整体造型适合连续生成。",
+        wardrobe: "轮廓明确的稳定服装组合，便于跨镜头保持一致。",
+        visual_anchor: ["轮廓稳定", "面部识别点明确", "服装主造型固定"],
+        full_description: buildProfessionalCharacterDescription({
+          name: nameB,
+          gender: "male",
+          age: "26至33岁",
+          wardrobe: "服装为稳定主造型，版型清晰，鞋履和配件统一",
+          hairstyle: "短发或中短发，轮廓利落，发型识别度明确",
+          face: "脸型与五官比例稳定，眉眼鼻唇特征清楚，肤质真实",
+          figure: "体型自然，站姿稳定，比例清晰",
+          accessories: "可保留一到两处高识别细节",
+          style,
+        }),
+        reference_prompt: `${nameB}，${style}风格专业角色设定图，左区正脸特写，右区标准三视图，同一角色一致性严格锁定。`,
         continuity_prompt:
-          `${nameB}，年轻男性，衬衫或卫衣，眼神专注，轻微疲惫感，写实真人短剧风格。`,
-        negative_prompt: "卡通感、古装、肌肉夸张、多人入镜、畸形手脚、年龄漂移、服装漂移",
-        voice_style: "沉稳、理性、略带疲惫",
+          `${nameB}，${style}风格，角色主造型稳定，脸部特征、发型、服装轮廓和配饰保持一致。`,
+        negative_prompt: "卡通感、设定稿崩坏、三视图不统一、多人入镜、畸形手脚、年龄漂移、服装漂移",
+        voice_style: "沉稳、清晰、有节制",
       },
     ],
-    scenes: (adaptation.subject_hints?.scenes || ["科技公司会议室"]).slice(0, 3).map((scene, index) => {
-      const sceneName = typeof scene === "string" ? scene : scene.name || `场景${index + 1}`;
+    scenes: (adaptation.subject_hints?.scenes?.length ? adaptation.subject_hints.scenes : [inferSceneName(adaptation, 0)]).slice(0, 3).map((scene, index) => {
+      const sceneName = typeof scene === "string" ? scene : scene.name || inferSceneName(adaptation, index);
       const location = typeof scene === "string" ? scene : scene.location || sceneName;
       return {
         name: sceneName,
         location,
-        description: `${location}内的紧张协作环境，夜间职场灯光，对应剧情推进节点。`,
+        description: `${location}，用于承接剧情推进的核心场景。`,
         full_description:
-          `8K画质，超写实，电影级摄影；无人物，全景广角镜头；${location || "科技公司会议室"}，冷灰色调封闭空间，墙面浅灰色，地面深灰色地毯，中央长条实木会议桌，周围黑色办公椅，一侧有大尺寸显示屏，前方白板与白板笔，角落有饮水机或办公设备，灯光冷静克制，构图利于真人短剧反复复用。`,
+          `8K画质，${style}风格，电影级摄影；无人物；${location}，空间结构完整，主色调统一，材质和陈设清晰，具备可重复复用的稳定环境元素；构图重心明确，适合后续镜头持续使用。`,
         reference_prompt:
-          `8K画质，超写实，电影级摄影，${location || "科技公司会议室"}，冷灰色调，无人物，全景广角镜头，办公桌、白板、显示屏完整可见。`,
-        continuity_prompt: `${location || "办公室"}，夜间职场环境，写实真人短剧风格，电脑屏幕冷光，环境稳定可复用。`,
-        negative_prompt: "卡通感、悬浮家具、古装环境、人物误入",
+          `8K画质，${style}风格，电影级摄影，${location}，无人物，环境结构完整，主体陈设清晰。`,
+        continuity_prompt: `${location}，${style}风格，空间结构和关键陈设稳定，适合后续镜头复用。`,
+        negative_prompt: "卡通感、环境崩坏、材质错误、悬浮家具、人物误入、畸形透视",
       };
     }),
-    props: [
-      {
-        name: "试播数据报表",
-        description: "显示数据断崖下跌的屏幕或报表，是危机的核心证据。",
+    props: [0, 1].map((index) => {
+      const propName = inferPropName(adaptation, index);
+      return {
+        name: propName,
+        description: `${propName}，用于剧情推进的关键道具。`,
         full_description:
-          "8K画质，超写实，电影级摄影；纯浅灰色背景，道具设定图；商务数据报表或电脑屏幕界面，核心内容是明显下跌的折线图与异常试播数据，材质清晰，信息区布局规整；标准道具三视图，横向排列侧视、正视、背视或主要正面结构，适合职场题材短剧反复出现。",
+          `8K画质，${style}风格，电影级摄影；纯净背景，道具设定图；${propName}，材质、颜色、结构细节清晰，标准三视图横向排列，完整展示正面、侧面、背面或关键结构视角。`,
         reference_prompt:
-          "8K画质，超写实，道具设定图，试播数据报表，明显下跌折线图，纯浅灰背景，商务科技感，结构清晰。",
-        continuity_prompt: "电脑屏幕上的试播数据报表，折线图明显下跌，写实职场风格，道具特写。",
-        negative_prompt: "卡通图表、乱码、UI 过度科幻",
-      },
-      {
-        name: "手机通知",
-        description: "林晚收到的项目告急通知，反复出现以强化压力。",
-        full_description:
-          "8K画质，超写实，电影级摄影；纯浅灰色背景，智能手机道具设定图，黑色边框全面屏，屏幕亮起显示项目告急工作消息界面，背面为磨砂银灰色玻璃材质，侧边实体按键与底部Type-C接口清晰；标准三视图横向排列，完整展示正面、侧面、背面结构。",
-        reference_prompt:
-          "8K画质，超写实，道具设定图，智能手机，项目告急消息界面，浅灰背景，正面侧面背面三视图，结构完整。",
-        continuity_prompt: "手机通知界面，道具特写，写实手机屏幕，职场告警信息。",
-        negative_prompt: "悬浮手机、屏幕扭曲、UI 乱码",
-      },
-    ],
+          `8K画质，${style}风格，道具设定图，${propName}，纯净背景，标准三视图，结构完整。`,
+        continuity_prompt: `${propName}，${style}风格道具特写，材质清晰，结构稳定，适合后续镜头重复出现。`,
+        negative_prompt: "卡通感、悬浮道具、材质错误、尺寸异常、结构崩坏、纹理乱码",
+      };
+    }),
   };
 }
 
@@ -188,7 +247,7 @@ function buildSubjectPrompt(subject, kind) {
       subject.age_range ? `年龄段：${subject.age_range}。` : "",
       subject.voice_style ? `声音气质：${subject.voice_style}。` : "",
       subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
-      "主体参考图，左区正脸特写，右区三视图，超写实真人短剧风格。",
+      "输出为专业角色设定图，严格执行左区正脸特写与右区标准三视图，不要擅自改风格。",
     ].filter(Boolean).join(" ");
   }
 
@@ -197,14 +256,14 @@ function buildSubjectPrompt(subject, kind) {
       prompt,
       subject.location ? `地点：${subject.location}。` : "",
       subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
-      "场景参考图，无主要人物入镜，写实真人短剧风格，环境稳定便于复用。",
+      "输出为专业场景设定图，环境结构稳定，便于后续镜头复用，不要擅自改风格。",
     ].filter(Boolean).join(" ");
   }
 
   return [
     prompt,
     subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
-    "道具参考图，单一主体，材质清晰，写实真人短剧风格。",
+    "输出为专业道具设定图，单一主体，材质和结构清晰，不要擅自改风格。",
   ].filter(Boolean).join(" ");
 }
 
@@ -264,6 +323,7 @@ function buildFallbackStoryboard(adaptation, charactersPayload) {
   const characters = charactersPayload.characters || [];
   const protagonist = characters[0]?.name || "主角甲";
   const partner = characters[1]?.name || "主角乙";
+  const style = adaptation?.style_preset || "写实";
   const shots = [];
 
   const units = chapters.length
@@ -300,8 +360,8 @@ function buildFallbackStoryboard(adaptation, charactersPayload) {
         scene.objective ||
         "这件事今天必须推进，不然项目就没有下一步。",
       duration_sec: 5,
-      image_prompt: `${scene.location || "办公室"}，${protagonist}处于强压力状态，准备推进项目，写实电影感，夜景职场氛围。`,
-      video_prompt: `${scene.location || "办公室"}内，${protagonist}从盯着数据到抬头做决定，轻微推镜，写实真人短剧风格。`,
+      image_prompt: `${scene.title || "核心场景"}，${protagonist}处于强压力状态，准备推进关键决定，${style}风格，电影感构图。`,
+      video_prompt: `${scene.title || "核心场景"}内，${protagonist}从压住情绪到做出决定，轻微推镜，${style}风格，人物状态变化清晰。`,
       negative_prompt: "卡通感、古装、多人混脸、肢体畸形、过曝",
     });
     shots.push({
@@ -318,18 +378,18 @@ function buildFallbackStoryboard(adaptation, charactersPayload) {
         scene.turning_point ||
         "先把链路跑通，再把效果一段一段补上，我们现在还有机会。",
       duration_sec: 5,
-      image_prompt: `${scene.location || "办公室"}，${partner}与${protagonist}在深夜协作，屏幕灯光映在脸上，写实真人短剧风格。`,
-      video_prompt: `${scene.location || "办公室"}内，${partner}与${protagonist}快速对话并同时操作电脑，过肩镜头，节奏紧张。`,
+      image_prompt: `${scene.title || "核心场景"}，${partner}与${protagonist}协作推进，${style}风格，人物关系明确。`,
+      video_prompt: `${scene.title || "核心场景"}内，${partner}与${protagonist}快速对话并同步行动，过肩镜头，${style}风格，节奏紧张。`,
       negative_prompt: "卡通感、古装、多人混脸、肢体畸形、过曝",
     });
   });
 
   return {
     style_guide: {
-      visual_style: "写实电影感真人短剧，都市夜景，冷暖对比灯光",
+      visual_style: `${style}风格，电影级摄影，人物一致性优先`,
       continuity_rules: [
-        `${protagonist}保持职业装与高压状态`,
-        `${partner}保持轻微疲惫但专注的技术负责人形象`,
+        `${protagonist}保持主造型和面部特征一致`,
+        `${partner}保持主造型和面部特征一致`,
       ],
     },
     shots: shots.slice(0, 6),
@@ -908,7 +968,7 @@ async function executeVideo(project, client, paths, manifest, onProgress) {
     const imageBuffer = [".png", ".jpg", ".jpeg"].includes(localExt)
       ? await fs.readFile(imagePath)
       : null;
-    const prompt = storyboardShot.video_prompt || shotOutput.videoPrompt || storyboardShot.image_prompt || storyboardShot.title || "写实真人短剧镜头";
+    const prompt = storyboardShot.video_prompt || shotOutput.videoPrompt || storyboardShot.image_prompt || storyboardShot.title || "真人表演视频镜头";
     await reportProgress(onProgress, `正在生成视频镜头 ${index + 1}/${shotOutputs.length}`, {
       current: index + 1,
       total: shotOutputs.length,

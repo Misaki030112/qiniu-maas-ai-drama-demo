@@ -85,20 +85,21 @@ function uniqBy(items, getKey) {
 
 function deriveScenesFromAdaptation(adaptation) {
   const sceneHints = adaptation?.subject_hints?.scenes || [];
+  const style = adaptation?.style_preset || "写实";
   return sceneHints.map((hint, index) => ({
     name: typeof hint === "string" ? hint : hint?.name || `场景${index + 1}`,
     source_scene_id: hint?.source_scene_id || null,
     location: typeof hint === "string" ? hint : hint?.location || "",
-    description: typeof hint === "string" ? `${hint}，写实真人短剧场景。` : hint?.description || "",
+    description: typeof hint === "string" ? `${hint}，${style}风格场景。` : hint?.description || "",
     full_description: typeof hint === "string"
-      ? `8K画质，超写实，电影级摄影；无人物，全景广角镜头；${hint}，环境结构清晰，材质真实，适合真人短剧反复复用。`
+      ? `8K画质，${style}风格，电影级摄影；无人物；${hint}，环境结构清晰，材质真实，构图稳定，适合后续镜头反复复用。`
       : hint?.full_description || "",
     reference_prompt: typeof hint === "string"
-      ? `8K画质，超写实，${hint}，电影级摄影，无人物，环境完整。`
+      ? `8K画质，${style}风格，${hint}，电影级摄影，无人物，环境完整。`
       : hint?.reference_prompt || "",
     continuity_prompt: [
-      typeof hint === "string" ? hint : hint?.location || hint?.name || "办公室场景",
-      "写实真人短剧风格，环境稳定，适合后续镜头复用。",
+      typeof hint === "string" ? hint : hint?.location || hint?.name || "核心场景",
+      `${style}风格，环境稳定，适合后续镜头复用。`,
     ].filter(Boolean).join(" "),
     negative_prompt: "卡通感、古装感、人物混入、畸形透视、过曝",
   }));
@@ -106,18 +107,19 @@ function deriveScenesFromAdaptation(adaptation) {
 
 function derivePropsFromAdaptation(adaptation) {
   const props = [];
+  const style = adaptation?.style_preset || "写实";
   for (const propHint of adaptation?.subject_hints?.props || []) {
     props.push({
       name: typeof propHint === "string" ? propHint : propHint?.name || "关键道具",
       source_scene_id: propHint?.source_scene_id || null,
-      description: typeof propHint === "string" ? `${propHint}，写实职场道具。` : propHint?.description || "",
+      description: typeof propHint === "string" ? `${propHint}，${style}风格道具。` : propHint?.description || "",
       full_description: typeof propHint === "string"
-        ? `8K画质，超写实，电影级摄影；纯浅灰色背景，道具设定图；${propHint}，材质结构清晰，标准三视图横向排列。`
+        ? `8K画质，${style}风格，电影级摄影；纯净背景，道具设定图；${propHint}，材质结构清晰，标准三视图横向排列。`
         : propHint?.full_description || "",
       reference_prompt: typeof propHint === "string"
-        ? `8K画质，超写实，道具设定图，${propHint}，纯浅灰色背景，标准三视图。`
+        ? `8K画质，${style}风格，道具设定图，${propHint}，纯净背景，标准三视图。`
         : propHint?.reference_prompt || "",
-      continuity_prompt: `${typeof propHint === "string" ? propHint : propHint?.name || "关键道具"}，写实真人短剧道具特写，材质清晰，适合后续镜头重复出现。`,
+      continuity_prompt: `${typeof propHint === "string" ? propHint : propHint?.name || "关键道具"}，${style}风格道具特写，材质清晰，适合后续镜头重复出现。`,
       negative_prompt: "卡通感、悬浮道具、材质错误、尺寸异常",
     });
   }
