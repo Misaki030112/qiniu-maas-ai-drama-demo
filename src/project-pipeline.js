@@ -229,6 +229,7 @@ function buildProfessionalCharacterDescription({
 
 function buildSubjectPrompt(subject, kind) {
   const prompt = subject.reference_prompt || subject.full_description || subject.continuity_prompt || "";
+  const noTextConstraint = "硬性约束：画面中禁止出现任何文字、数字、字母、标签、标题、说明、对白字幕、UI界面字样、水印、logo、品牌名称、海报排版元素。不要把角色名、年龄、角色定位、场景说明直接渲染进画面。";
   if (kind === "character") {
     return [
       prompt,
@@ -236,6 +237,7 @@ function buildSubjectPrompt(subject, kind) {
       subject.age_range ? `年龄段：${subject.age_range}。` : "",
       subject.voice_style ? `声音气质：${subject.voice_style}。` : "",
       subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
+      noTextConstraint,
       "输出为专业角色设定图，严格执行左区正脸特写与右区标准三视图，不要擅自改风格。",
     ].filter(Boolean).join(" ");
   }
@@ -245,6 +247,7 @@ function buildSubjectPrompt(subject, kind) {
       prompt,
       subject.location ? `地点：${subject.location}。` : "",
       subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
+      noTextConstraint,
       "输出为专业场景设定图，环境结构稳定，便于后续镜头复用，不要擅自改风格。",
     ].filter(Boolean).join(" ");
   }
@@ -252,6 +255,7 @@ function buildSubjectPrompt(subject, kind) {
   return [
     prompt,
     subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
+    noTextConstraint,
     "输出为专业道具设定图，单一主体，材质和结构清晰，不要擅自改风格。",
   ].filter(Boolean).join(" ");
 }
@@ -294,6 +298,7 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
   await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
 
   const imagePath = `${safeName}.png`;
+  const generatedAt = new Date().toISOString();
   const referenceImages = await buildSubjectReferenceInputs(paths, subject.reference_images || []);
   const image = logger
     ? await logger.measure(
@@ -323,6 +328,7 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
     kind,
     name: subject.name,
     status: "ok",
+    generatedAt,
   });
 
   return {
@@ -334,6 +340,7 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
     imagePath,
     promptPath: `${safeName}.prompt.txt`,
     model,
+    generatedAt,
   };
 }
 

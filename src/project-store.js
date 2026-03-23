@@ -101,7 +101,7 @@ function deriveScenesFromAdaptation(adaptation) {
       typeof hint === "string" ? hint : hint?.location || hint?.name || "核心场景",
       `${style}风格，环境稳定，适合后续镜头复用。`,
     ].filter(Boolean).join(" "),
-    negative_prompt: "卡通感、古装感、人物混入、畸形透视、过曝",
+    negative_prompt: "卡通感、古装感、人物混入、畸形透视、过曝、任何文字、数字、字母、标签、水印、logo、UI字样",
   }));
 }
 
@@ -120,7 +120,7 @@ function derivePropsFromAdaptation(adaptation) {
         ? `8K画质，${style}风格，道具设定图，${propHint}，纯净背景，标准三视图。`
         : propHint?.reference_prompt || "",
       continuity_prompt: `${typeof propHint === "string" ? propHint : propHint?.name || "关键道具"}，${style}风格道具特写，材质清晰，适合后续镜头重复出现。`,
-      negative_prompt: "卡通感、悬浮道具、材质错误、尺寸异常",
+      negative_prompt: "卡通感、悬浮道具、材质错误、尺寸异常、任何文字、数字、字母、标签、水印、logo、UI字样",
     });
   }
   return uniqBy(props, (item) => item.name);
@@ -713,7 +713,7 @@ export async function readProjectDetail(projectId) {
     ...item,
     kind: item.kind || "character",
     key: item.key || item.name,
-    url: `/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}`,
+    url: `/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`,
   }));
   const roleReferences = subjectReferences.filter((item) => item.kind === "character");
   const sceneReferences = subjectReferences.filter((item) => item.kind === "scene");
