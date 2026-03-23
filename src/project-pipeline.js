@@ -11,31 +11,22 @@ import {
   createPlaceholderPpm,
   ensureDir,
   escapeSubtitlePath,
-  makeRunId,
+  readJson,
   readText,
   runCommand,
   secondsToSrtTime,
   writeJson,
   writeText,
 } from "./utils.js";
+import {
+  ensureProjectWorkspace,
+  getProjectPaths,
+  readProject,
+  readProjectDetail,
+  writeProject,
+} from "./project-store.js";
 
-function parseArgs(argv) {
-  const args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const key = argv[index];
-    const next = argv[index + 1];
-    if (key === "--story" && next) {
-      args.story = next;
-      index += 1;
-      continue;
-    }
-    if (key === "--run-id" && next) {
-      args.runId = next;
-      index += 1;
-    }
-  }
-  return args;
-}
+const runningStages = new Map();
 
 function findCharacter(characters, speaker) {
   return characters.find((item) => item.name === speaker);
@@ -218,10 +209,7 @@ async function saveChatStage({
       throw error;
     }
     const fallback = fallbackFactory();
-    await writeText(
-      path.join(stageDir, `${fileStem}.raw.txt`),
-      `FALLBACK\n\n${error.message}\n`,
-    );
+    await writeText(path.join(stageDir, `${fileStem}.raw.txt`), `FALLBACK\n\n${error.message}\n`);
     await writeJson(path.join(stageDir, `${fileStem}.json`), fallback);
     await writeJson(path.join(stageDir, `${fileStem}.meta.json`), {
       model,
@@ -232,14 +220,12 @@ async function saveChatStage({
   }
 }
 
-async function runTextComparisons({ client, stageName, messages, runDir }) {
+async function runTextComparisons({ client, stageName, messages, outputDir, models }) {
   if (!config.qiniu.compareModels.text.length) {
-    return [];
+    return;
   }
-
-  const comparisonDir = path.join(runDir, "comparisons", "text", stageName);
+  const comparisonDir = path.join(outputDir, "comparisons", "text", stageName);
   await ensureDir(comparisonDir);
-  const results = [];
 
   for (const model of config.qiniu.compareModels.text) {
     try {
@@ -255,19 +241,16 @@ async function runTextComparisons({ client, stageName, messages, runDir }) {
         model: result.model,
         usage: result.usage,
         responseId: result.responseId,
+        primaryModel: models,
       });
-      results.push({ model, status: "ok" });
     } catch (error) {
       await writeJson(path.join(comparisonDir, `${model.replaceAll("/", "__")}.error.json`), {
         model,
         status: "error",
         message: error.message,
       });
-      results.push({ model, status: "error", message: error.message });
     }
   }
-
-  return results;
 }
 
 async function renderSilentAudio(outputPath, seconds) {
@@ -367,13 +350,112 @@ async function burnSubtitles(videoPath, subtitlesPath, outputPath) {
   ]);
 }
 
-async function generateRoleReferenceImages({
-  client,
-  characters,
-  outputDir,
-  manifest,
-}) {
-  const results = [];
+async function readOptionalJson(filePath) {
+  try {
+    return await readJson(filePath);
+  } catch {
+    return null;
+  }
+}
+
+async function loadManifest(projectId, project) {
+  const paths = getProjectPaths(projectId);
+  const manifest = (await readOptionalJson(paths.manifestPath)) || {
+    projectId,
+    projectName: project.name,
+    startedAt: new Date().toISOString(),
+    baseUrl: config.qiniu.baseUrl,
+    renderStrategy: {
+      mode: config.video.renderMode,
+      note: "当前输出仍是静态镜头 + 配音 + 字幕合成，视频模型阶段尚未接通。",
+      plannedVideoModel: project.models.shotVideo,
+    },
+    stages: [],
+    outputs: {},
+  };
+  return manifest;
+}
+
+function upsertStageRecord(manifest, stage, model, output) {
+  const next = { stage, model, output, updatedAt: new Date().toISOString() };
+  manifest.stages = (manifest.stages || []).filter((item) => item.stage !== stage);
+  manifest.stages.push(next);
+}
+
+async function saveManifest(projectId, manifest) {
+  const paths = getProjectPaths(projectId);
+  await writeJson(paths.manifestPath, manifest);
+}
+
+async function saveModelMatrix(project, manifest) {
+  const paths = getProjectPaths(project.id);
+  await writeJson(paths.modelMatrixPath, {
+    provider: config.strategy.provider,
+    baseUrl: config.qiniu.baseUrl,
+    primary: {
+      adaptation: project.models.adaptation,
+      characters: project.models.characters,
+      storyboard: project.models.storyboard,
+      roleImage: project.models.roleImage,
+      shotImage: project.models.shotImage,
+      shotVideo: project.models.shotVideo,
+      voice: {
+        narrator: config.qiniu.voices.narrator,
+        female: config.qiniu.voices.female,
+        male: config.qiniu.voices.male,
+      },
+    },
+    comparisons: {
+      text: config.qiniu.compareModels.text,
+      image: config.qiniu.compareModels.image,
+    },
+    renderStrategy: manifest.renderStrategy,
+    recommendations: config.strategy.recommendations,
+  });
+}
+
+async function executeAdaptation(project, client, paths, manifest) {
+  const storyText = project.storyText.trim() || (await readText(path.join(paths.dirs.input, "story.txt")));
+  if (!storyText.trim()) {
+    throw new Error("请先输入故事文本。");
+  }
+  await writeText(path.join(paths.dirs.input, "story.txt"), `${storyText.trim()}\n`);
+  const messages = buildAdaptationMessages(storyText);
+  const adaptation = await saveChatStage({
+    client,
+    model: project.models.adaptation,
+    messages,
+    stageDir: paths.dirs.adaptation,
+    fileStem: "adaptation",
+  });
+  upsertStageRecord(manifest, "adaptation", project.models.adaptation, "02-adaptation/adaptation.json");
+  manifest.outputs.adaptation = "02-adaptation/adaptation.json";
+  await runTextComparisons({
+    client,
+    stageName: "adaptation",
+    messages,
+    outputDir: paths.outputDir,
+    models: project.models.adaptation,
+  });
+  return adaptation;
+}
+
+async function executeCharacters(project, client, paths, manifest) {
+  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  if (!adaptation) {
+    throw new Error("请先完成剧本改编阶段。");
+  }
+  const messages = buildCharacterMessages(adaptation);
+  const payload = await saveChatStage({
+    client,
+    model: project.models.characters,
+    messages,
+    stageDir: paths.dirs.characters,
+    fileStem: "characters",
+    fallbackFactory: () => buildFallbackCharacters(adaptation),
+  });
+  const characters = payload.characters || [];
+  const roleReferences = [];
   for (let index = 0; index < characters.length; index += 1) {
     const character = characters[index];
     const safeName = character.name.replaceAll(/\s+/g, "_");
@@ -387,202 +469,113 @@ async function generateRoleReferenceImages({
     ]
       .filter(Boolean)
       .join(" ");
-    const imagePath = path.join(outputDir, `${safeName}.png`);
-    const promptPath = path.join(outputDir, `${safeName}.prompt.txt`);
-    await writeText(promptPath, prompt);
+    await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
     let status = "ok";
+    let imagePath = `${safeName}.png`;
     try {
       const image = await client.generateImage({
-        model: config.qiniu.models.roleImage,
+        model: project.models.roleImage,
         prompt,
       });
-      await fs.writeFile(imagePath, image.buffer);
-      await writeJson(path.join(outputDir, `${safeName}.meta.json`), {
-        model: config.qiniu.models.roleImage,
+      await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
+      await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
+        model: project.models.roleImage,
         usage: image.usage || null,
-        outputFormat: image.output_format || "png",
       });
     } catch (error) {
       if (!config.allowFallbacks) {
         throw error;
       }
       status = "fallback";
-      const ppmPath = path.join(outputDir, `${safeName}.ppm`);
-      await createPlaceholderPpm(ppmPath, index);
-      await writeJson(path.join(outputDir, `${safeName}.meta.json`), {
-        model: config.qiniu.models.roleImage,
+      imagePath = `${safeName}.ppm`;
+      await createPlaceholderPpm(path.join(paths.dirs.roleReference, imagePath), index);
+      await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
+        model: project.models.roleImage,
         status,
         message: error.message,
       });
     }
-
-    results.push({
+    roleReferences.push({
       name: character.name,
       role: character.role,
       status,
-      imagePath: status === "ok" ? `${safeName}.png` : `${safeName}.ppm`,
+      imagePath,
       promptPath: `${safeName}.prompt.txt`,
-      model: config.qiniu.models.roleImage,
+      model: project.models.roleImage,
     });
   }
-
-  manifest.stages.push({
-    stage: "role_reference",
-    model: config.qiniu.models.roleImage,
-    output: "04-role-reference",
-  });
-  return results;
+  manifest.roleReferences = roleReferences;
+  manifest.outputs.characters = "03-characters/characters.json";
+  manifest.outputs.roleReference = "04-role-reference";
+  upsertStageRecord(manifest, "characters", project.models.characters, "03-characters/characters.json");
+  return payload;
 }
 
-async function run() {
-  if (!config.qiniu.apiKey) {
-    throw new Error("Missing QINIU_API_KEY in .env");
+async function executeStoryboard(project, client, paths, manifest) {
+  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  if (!adaptation || !characters) {
+    throw new Error("请先完成角色设定阶段。");
   }
-
-  const args = parseArgs(process.argv.slice(2));
-  const storyPath = args.story
-    ? path.resolve(config.workspaceRoot, args.story)
-    : config.inputStoryPath;
-  const storyText = await readText(storyPath);
-
-  const runId = args.runId || process.env.RUN_ID || makeRunId();
-  const runDir = path.join(config.outputRoot, runId);
-  const dirs = {
-    input: path.join(runDir, "01-input"),
-    adaptation: path.join(runDir, "02-adaptation"),
-    characters: path.join(runDir, "03-characters"),
-    roleReference: path.join(runDir, "04-role-reference"),
-    storyboard: path.join(runDir, "05-storyboard"),
-    images: path.join(runDir, "06-images"),
-    audio: path.join(runDir, "07-audio"),
-    subtitles: path.join(runDir, "08-subtitles"),
-    video: path.join(runDir, "09-video"),
-  };
-
-  for (const dir of Object.values(dirs)) {
-    await ensureDir(dir);
-  }
-
-  await writeText(path.join(dirs.input, "story.txt"), storyText);
-
-  const client = new QiniuMaaSClient(config.qiniu);
-  const manifest = {
-    runId,
-    startedAt: new Date().toISOString(),
-    storyPath,
-    baseUrl: config.qiniu.baseUrl,
-    renderStrategy: {
-      mode: config.video.renderMode,
-      note:
-        config.video.renderMode === "kenburns"
-          ? "当前是静帧 + 配音 + 字幕 + 轻运动合成，不是真正的连续视频模型生成。"
-          : "当前是静帧 + 配音 + 字幕合成，不是真正的连续视频模型生成。",
-      plannedVideoModel: config.qiniu.models.shotVideo,
-    },
-    stages: [],
-    outputs: {},
-  };
-  await writeJson(path.join(runDir, "manifest.json"), manifest);
-
-  const adaptationMessages = buildAdaptationMessages(storyText);
-  const adaptation = await saveChatStage({
-    client,
-    model: config.qiniu.models.adaptation,
-    messages: adaptationMessages,
-    stageDir: dirs.adaptation,
-    fileStem: "adaptation",
-  });
-  manifest.stages.push({
-    stage: "adaptation",
-    model: config.qiniu.models.adaptation,
-    output: "02-adaptation/adaptation.json",
-  });
-  await writeJson(path.join(runDir, "manifest.json"), manifest);
-  await runTextComparisons({
-    client,
-    stageName: "adaptation",
-    messages: adaptationMessages,
-    runDir,
-  });
-
-  const characterMessages = buildCharacterMessages(adaptation);
-  const charactersPayload = await saveChatStage({
-    client,
-    model: config.qiniu.models.characters,
-    messages: characterMessages,
-    stageDir: dirs.characters,
-    fileStem: "characters",
-    fallbackFactory: () => buildFallbackCharacters(adaptation),
-  });
-  const characters = charactersPayload.characters || [];
-  manifest.stages.push({
-    stage: "characters",
-    model: config.qiniu.models.characters,
-    output: "03-characters/characters.json",
-  });
-  await writeJson(path.join(runDir, "manifest.json"), manifest);
-
-  const roleReferences = await generateRoleReferenceImages({
-    client,
-    characters,
-    outputDir: dirs.roleReference,
-    manifest,
-  });
-
-  const storyboardMessages = buildStoryboardMessages(adaptation, charactersPayload);
+  const messages = buildStoryboardMessages(adaptation, characters);
   const storyboard = await saveChatStage({
     client,
-    model: config.qiniu.models.storyboard,
-    messages: storyboardMessages,
-    stageDir: dirs.storyboard,
+    model: project.models.storyboard,
+    messages,
+    stageDir: paths.dirs.storyboard,
     fileStem: "storyboard",
-    fallbackFactory: () => buildFallbackStoryboard(adaptation, charactersPayload),
+    fallbackFactory: () => buildFallbackStoryboard(adaptation, characters),
   });
-  manifest.stages.push({
-    stage: "storyboard",
-    model: config.qiniu.models.storyboard,
-    output: "05-storyboard/storyboard.json",
-  });
-  await writeJson(path.join(runDir, "manifest.json"), manifest);
+  upsertStageRecord(manifest, "storyboard", project.models.storyboard, "05-storyboard/storyboard.json");
+  manifest.outputs.storyboard = "05-storyboard/storyboard.json";
   await runTextComparisons({
     client,
     stageName: "storyboard",
-    messages: storyboardMessages,
-    runDir,
+    messages,
+    outputDir: paths.outputDir,
+    models: project.models.storyboard,
   });
+  return storyboard;
+}
 
+async function executeMedia(project, client, paths, manifest) {
+  const charactersPayload = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
+  if (!charactersPayload || !storyboard) {
+    throw new Error("请先完成分镜阶段。");
+  }
+  const characters = charactersPayload.characters || [];
   const shots = storyboard.shots || [];
   if (!shots.length) {
-    throw new Error("Storyboard returned no shots.");
+    throw new Error("分镜里没有镜头。");
   }
 
   const subtitles = [];
-  const segmentPaths = [];
   const shotOutputs = [];
+  const segmentPaths = [];
   let cursor = 0;
 
   for (let index = 0; index < shots.length; index += 1) {
     const shot = shots[index];
     const shotId = shot.shot_id || `shot_${String(index + 1).padStart(2, "0")}`;
     const prompt = buildFinalImagePrompt(shot, characters, storyboard.style_guide);
-    const imageBase = path.join(dirs.images, shotId);
-    const audioPath = path.join(dirs.audio, `${shotId}.mp3`);
-    const segmentPath = path.join(dirs.video, `${shotId}.mp4`);
+    const imageBase = path.join(paths.dirs.images, shotId);
+    const audioPath = path.join(paths.dirs.audio, `${shotId}.mp3`);
+    const segmentPath = path.join(paths.dirs.video, `${shotId}.mp4`);
     let imagePath = `${imageBase}.png`;
     let imageStatus = "ok";
     let audioStatus = "ok";
 
-    await writeText(path.join(dirs.images, `${shotId}.prompt.txt`), prompt);
+    await writeText(path.join(paths.dirs.images, `${shotId}.prompt.txt`), prompt);
 
     try {
       const imageResult = await client.generateImage({
-        model: config.qiniu.models.shotImage,
+        model: project.models.shotImage,
         prompt,
       });
       await fs.writeFile(imagePath, imageResult.buffer);
-      await writeJson(path.join(dirs.images, `${shotId}.meta.json`), {
-        model: config.qiniu.models.shotImage,
-        outputFormat: imageResult.output_format || "png",
+      await writeJson(path.join(paths.dirs.images, `${shotId}.meta.json`), {
+        model: project.models.shotImage,
         usage: imageResult.usage || null,
       });
     } catch (error) {
@@ -592,8 +585,8 @@ async function run() {
       imageStatus = "fallback";
       imagePath = `${imageBase}.ppm`;
       await createPlaceholderPpm(imagePath, index);
-      await writeJson(path.join(dirs.images, `${shotId}.meta.json`), {
-        model: config.qiniu.models.shotImage,
+      await writeJson(path.join(paths.dirs.images, `${shotId}.meta.json`), {
+        model: project.models.shotImage,
         status: "fallback",
         message: error.message,
       });
@@ -607,7 +600,7 @@ async function run() {
       });
       await fs.writeFile(audioPath, ttsResult.buffer);
       durationSec = Math.max(durationSec, (ttsResult.durationMs || 0) / 1000 + 0.35);
-      await writeJson(path.join(dirs.audio, `${shotId}.meta.json`), {
+      await writeJson(path.join(paths.dirs.audio, `${shotId}.meta.json`), {
         voiceType: resolveVoice(shot.speaker, characters),
         durationMs: ttsResult.durationMs,
         reqid: ttsResult.reqid,
@@ -618,7 +611,7 @@ async function run() {
       }
       audioStatus = "fallback";
       await renderSilentAudio(audioPath, durationSec);
-      await writeJson(path.join(dirs.audio, `${shotId}.meta.json`), {
+      await writeJson(path.join(paths.dirs.audio, `${shotId}.meta.json`), {
         status: "fallback",
         message: error.message,
       });
@@ -646,107 +639,150 @@ async function run() {
       durationSec,
       imageStatus,
       audioStatus,
-      imagePath: path.relative(runDir, imagePath),
-      audioPath: path.relative(runDir, audioPath),
-      segmentPath: path.relative(runDir, segmentPath),
+      imagePath: path.relative(paths.outputDir, imagePath),
+      audioPath: path.relative(paths.outputDir, audioPath),
+      segmentPath: path.relative(paths.outputDir, segmentPath),
+      subtitle: shot.subtitle || shot.line,
     });
   }
 
-  const subtitlesPath = path.join(dirs.subtitles, "subtitles.srt");
+  const subtitlesPath = path.join(paths.dirs.subtitles, "subtitles.srt");
+  const concatListPath = path.join(paths.dirs.video, "segments.txt");
   await writeText(subtitlesPath, subtitles.join("\n"));
-
-  if (config.qiniu.compareModels.image.length) {
-    const imageCompareDir = path.join(runDir, "comparisons", "image");
-    await ensureDir(imageCompareDir);
-    const firstShot = shots[0];
-    const prompt = buildFinalImagePrompt(firstShot, characters, storyboard.style_guide);
-    for (const model of config.qiniu.compareModels.image) {
-      try {
-        const image = await client.generateImage({ model, prompt });
-        await fs.writeFile(
-          path.join(imageCompareDir, `${model.replaceAll("/", "__")}.png`),
-          image.buffer,
-        );
-        await writeJson(
-          path.join(imageCompareDir, `${model.replaceAll("/", "__")}.meta.json`),
-          { model, usage: image.usage || null },
-        );
-      } catch (error) {
-        await writeJson(
-          path.join(imageCompareDir, `${model.replaceAll("/", "__")}.error.json`),
-          { model, message: error.message },
-        );
-      }
-    }
-  }
-
-  const concatListPath = path.join(dirs.video, "segments.txt");
   await writeText(
     concatListPath,
     segmentPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
   );
 
-  const roughVideoPath = path.join(dirs.video, "rough-output.mp4");
-  const outputVideoPath = path.join(dirs.video, "output.mp4");
+  if (config.qiniu.compareModels.image.length) {
+    const comparisonDir = path.join(paths.outputDir, "comparisons", "image");
+    await ensureDir(comparisonDir);
+    const firstShot = shots[0];
+    const prompt = buildFinalImagePrompt(firstShot, characters, storyboard.style_guide);
+    for (const model of config.qiniu.compareModels.image) {
+      try {
+        const image = await client.generateImage({ model, prompt });
+        await fs.writeFile(path.join(comparisonDir, `${model.replaceAll("/", "__")}.png`), image.buffer);
+        await writeJson(path.join(comparisonDir, `${model.replaceAll("/", "__")}.meta.json`), {
+          model,
+          usage: image.usage || null,
+        });
+      } catch (error) {
+        await writeJson(path.join(comparisonDir, `${model.replaceAll("/", "__")}.error.json`), {
+          model,
+          message: error.message,
+        });
+      }
+    }
+  }
+
+  manifest.shots = shotOutputs;
+  manifest.outputs.subtitles = "08-subtitles/subtitles.srt";
+  upsertStageRecord(manifest, "media", project.models.shotImage, "06-images + 07-audio + 08-subtitles");
+}
+
+async function executeOutput(project, paths, manifest) {
+  const subtitlesPath = path.join(paths.dirs.subtitles, "subtitles.srt");
+  const concatListPath = path.join(paths.dirs.video, "segments.txt");
+  const roughVideoPath = path.join(paths.dirs.video, "rough-output.mp4");
+  const outputVideoPath = path.join(paths.dirs.video, "output.mp4");
+
   await concatSegments(concatListPath, roughVideoPath);
   await burnSubtitles(roughVideoPath, subtitlesPath, outputVideoPath);
-
-  manifest.outputs = {
-    adaptation: "02-adaptation/adaptation.json",
-    characters: "03-characters/characters.json",
-    roleReference: "04-role-reference",
-    storyboard: "05-storyboard/storyboard.json",
-    subtitles: "08-subtitles/subtitles.srt",
-    outputVideo: "09-video/output.mp4",
-  };
-  manifest.roleReferences = roleReferences;
-  manifest.shots = shotOutputs;
+  manifest.outputs.outputVideo = "09-video/output.mp4";
   manifest.runSummary = {
     textModels: {
-      adaptation: config.qiniu.models.adaptation,
-      characters: config.qiniu.models.characters,
-      storyboard: config.qiniu.models.storyboard,
+      adaptation: project.models.adaptation,
+      characters: project.models.characters,
+      storyboard: project.models.storyboard,
     },
     imageModels: {
-      roleReference: config.qiniu.models.roleImage,
-      shots: config.qiniu.models.shotImage,
+      roleReference: project.models.roleImage,
+      shots: project.models.shotImage,
     },
     videoStage: {
-      plannedModel: config.qiniu.models.shotVideo,
+      plannedModel: project.models.shotVideo,
       implemented: false,
     },
   };
   manifest.completedAt = new Date().toISOString();
-
-  await writeJson(path.join(runDir, "manifest.json"), manifest);
-  await writeJson(path.join(runDir, "model-matrix.json"), {
-    provider: config.strategy.provider,
-    baseUrl: config.qiniu.baseUrl,
-    primary: {
-      adaptation: config.qiniu.models.adaptation,
-      characters: config.qiniu.models.characters,
-      storyboard: config.qiniu.models.storyboard,
-      roleImage: config.qiniu.models.roleImage,
-      shotImage: config.qiniu.models.shotImage,
-      shotVideo: config.qiniu.models.shotVideo,
-      voice: {
-        narrator: config.qiniu.voices.narrator,
-        female: config.qiniu.voices.female,
-        male: config.qiniu.voices.male,
-      },
-    },
-    comparisons: {
-      text: config.qiniu.compareModels.text,
-      image: config.qiniu.compareModels.image,
-    },
-    renderStrategy: manifest.renderStrategy,
-    recommendations: config.strategy.recommendations,
-  });
-
-  console.log(JSON.stringify({ runId, outputVideoPath, runDir }, null, 2));
+  upsertStageRecord(manifest, "output", "static-compose", "09-video/output.mp4");
 }
 
-run().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+function assertExecutable(project, stage) {
+  if (stage === "video") {
+    throw new Error("视频模型阶段还没有接通，所以当前不可执行。");
+  }
+  const dependencies = {
+    adaptation: [],
+    characters: ["adaptation"],
+    storyboard: ["characters"],
+    media: ["storyboard"],
+    output: ["media"],
+  }[stage] || [];
+  for (const dependency of dependencies) {
+    if (project.stageState[dependency]?.status !== "done") {
+      throw new Error(`请先完成 ${dependency} 阶段。`);
+    }
+  }
+}
+
+export async function executeProjectStage(projectId, stage) {
+  if (runningStages.has(projectId)) {
+    throw new Error("当前项目已有阶段在运行中，请稍后再试。");
+  }
+
+  const project = await readProject(projectId);
+  assertExecutable(project, stage);
+  project.stageState[stage] = {
+    status: "running",
+    updatedAt: new Date().toISOString(),
+    error: null,
+  };
+  await writeProject(project);
+  runningStages.set(projectId, stage);
+
+  try {
+    const paths = await ensureProjectWorkspace(projectId);
+    const client = new QiniuMaaSClient(config.qiniu);
+    const manifest = await loadManifest(projectId, project);
+
+    if (stage === "adaptation") {
+      await executeAdaptation(project, client, paths, manifest);
+    } else if (stage === "characters") {
+      await executeCharacters(project, client, paths, manifest);
+    } else if (stage === "storyboard") {
+      await executeStoryboard(project, client, paths, manifest);
+    } else if (stage === "media") {
+      await executeMedia(project, client, paths, manifest);
+    } else if (stage === "output") {
+      await executeOutput(project, paths, manifest);
+    } else {
+      throw new Error(`Unknown stage: ${stage}`);
+    }
+
+    project.stageState[stage] = {
+      status: "done",
+      updatedAt: new Date().toISOString(),
+      error: null,
+    };
+    await saveManifest(projectId, manifest);
+    await saveModelMatrix(project, manifest);
+    await writeProject(project);
+    return await readProjectDetail(projectId);
+  } catch (error) {
+    project.stageState[stage] = {
+      status: "error",
+      updatedAt: new Date().toISOString(),
+      error: error.message,
+    };
+    await writeProject(project);
+    throw error;
+  } finally {
+    runningStages.delete(projectId);
+  }
+}
+
+export function isProjectStageRunning(projectId) {
+  return runningStages.has(projectId);
+}

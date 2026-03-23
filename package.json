@@ -5,8 +5,11 @@
   "main": "src/index.js",
   "scripts": {
     "demo": "node src/index.js",
-    "start": "node src/index.js",
-    "workbench": "node src/workbench.js",
+    "pipeline": "node src/index.js",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "workbench:legacy": "node src/workbench.js",
     "lint": "eslint src --ext .js"
   },
   "keywords": [],
@@ -16,6 +19,9 @@
   "dependencies": {
     "dotenv": "^17.3.1",
     "ffmpeg-static": "^5.3.0",
-    "openai": "^6.32.0"
+    "next": "^16.2.1",
+    "openai": "^6.32.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   }
 }

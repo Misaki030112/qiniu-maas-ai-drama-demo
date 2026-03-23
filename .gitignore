@@ -1,5 +1,8 @@
 node_modules
 output/runs
+output/projects
+.data
+.next
 .DS_Store
 .env
 input/generated

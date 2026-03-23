@@ -165,24 +165,6 @@ function htmlPage() {
       word-break: break-all;
     }
     .stack { display: grid; gap: 12px; }
-    .run-list { display: grid; gap: 10px; margin-top: 14px; }
-    .run-item {
-      padding: 14px;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      cursor: pointer;
-      transition: all .16s ease;
-    }
-    .run-item:hover, .run-item.active {
-      border-color: rgba(155,255,61,0.35);
-      background: var(--panel-2);
-    }
-    .run-item strong {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 14px;
-    }
     .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
     .pill {
       display: inline-flex;
@@ -348,21 +330,22 @@ function htmlPage() {
     <aside class="left">
       <div class="stack">
         <div>
-          <div class="panel-title">运行记录</div>
-          <div class="muted">只保留当前最重要的信息：哪次运行完成了、是否能看结果。</div>
+          <div class="panel-title">当前状态</div>
+          <div class="muted">这里只展示当前这次链路的真实状态，不展示历史 run 堆叠。</div>
         </div>
+        <div class="card stack" id="statusPanel"></div>
         <div class="btn-row">
-          <button class="btn" id="refreshBtn">刷新</button>
+          <button class="btn" id="refreshBtn">刷新状态</button>
+          <button class="btn" id="resetBtn">清空旧结果</button>
         </div>
       </div>
-      <div class="run-list" id="runList"></div>
     </aside>
 
     <main class="center">
       <div class="topbar">
         <div>
           <h1>点众 AI 真人剧 Demo</h1>
-          <p>核心流程：剧本 -> 角色 -> 分镜 -> 画面 -> 配音 -> 成片。只展示可理解、可执行、可验收的能力。</p>
+          <p>核心流程：剧本 -> 角色 -> 分镜 -> 画面 -> 配音。视频模型未接通，所以这里只展示前置链路结果。</p>
         </div>
         <div class="tabs" id="tabs"></div>
       </div>
@@ -401,18 +384,13 @@ function htmlPage() {
           <label for="shotImageModel">镜头图模型</label>
           <select id="shotImageModel" class="select"></select>
         </div>
-        <div class="field">
-          <label for="videoModel">视频模型位</label>
-          <select id="videoModel" class="select"></select>
-        </div>
 
         <div class="btn-row">
           <button class="btn primary" id="runBtn">执行一条新链路</button>
-          <button class="btn" id="fillCurrentBtn">带入当前运行配置</button>
         </div>
 
         <div class="note" id="runMessage">
-          当前视频阶段仍是“关键帧 + 音频 + 字幕 + 合成”。视频模型位现在是规划位，不是假装已经做完。
+          视频模型还没接通。当前只能生成静态镜头 + 配音 + 字幕的合成输出，用来检查前置链路是否跑通。
         </div>
       </div>
     </aside>
@@ -424,7 +402,7 @@ function htmlPage() {
       { id: "script", label: "剧本" },
       { id: "characters", label: "角色" },
       { id: "storyboard", label: "分镜" },
-      { id: "preview", label: "成片" },
+      { id: "output", label: "输出" },
     ];
 
     const state = {
@@ -436,7 +414,7 @@ function htmlPage() {
     };
 
     const appEl = document.getElementById("app");
-    const runListEl = document.getElementById("runList");
+    const statusPanelEl = document.getElementById("statusPanel");
     const tabsEl = document.getElementById("tabs");
     const runMessageEl = document.getElementById("runMessage");
     const modelFields = {
@@ -445,7 +423,6 @@ function htmlPage() {
       storyboard: document.getElementById("storyboardModel"),
       roleImage: document.getElementById("roleImageModel"),
       shotImage: document.getElementById("shotImageModel"),
-      shotVideo: document.getElementById("videoModel"),
     };
 
     document.getElementById("refreshBtn").addEventListener("click", async () => {
@@ -453,12 +430,13 @@ function htmlPage() {
       if (state.currentRunId) {
         await loadRun(state.currentRunId);
       } else {
+        state.currentRun = null;
         render();
       }
     });
 
+    document.getElementById("resetBtn").addEventListener("click", resetWorkspace);
     document.getElementById("runBtn").addEventListener("click", executeRun);
-    document.getElementById("fillCurrentBtn").addEventListener("click", fillCurrentRunConfig);
 
     function safe(value) {
       return String(value || "")
@@ -492,22 +470,38 @@ function htmlPage() {
       });
     }
 
-    function renderRunList() {
-      runListEl.innerHTML = state.runs.map((run) => {
-        const cls = run.runId === state.currentRunId ? "run-item active" : "run-item";
-        return (
-          '<div class="' + cls + '" data-run-id="' + run.runId + '">' +
-            "<strong>" + safe(run.runId) + "</strong>" +
-            '<div class="pill-row">' +
-              pill(run.statusText, run.isComplete ? "good" : "warn") +
-            "</div>" +
-            '<div class="meta" style="margin-top:8px">' + safe(run.completedAt || run.startedAt || "等待开始") + "</div>" +
-          "</div>"
-        );
-      }).join("");
-      [...runListEl.querySelectorAll(".run-item")].forEach((node) => {
-        node.addEventListener("click", () => loadRun(node.dataset.runId));
-      });
+    function renderStatusPanel() {
+      const run = state.currentRun;
+      if (!run) {
+        statusPanelEl.innerHTML =
+          "<h3>尚未执行</h3>" +
+          '<div class="body">清空旧结果后，界面只保留一次真实执行。先在右侧输入故事并启动链路。</div>' +
+          '<div class="meta">视频模型：未接通</div>' +
+          '<div class="meta">当前输出：无</div>';
+        return;
+      }
+
+      const completedStages = new Set((run.manifest?.stages || []).map((item) => item.stage));
+      const stagePills = [
+        ["剧本", completedStages.has("adaptation")],
+        ["角色", completedStages.has("characters")],
+        ["角色首图", completedStages.has("role_reference")],
+        ["分镜", completedStages.has("storyboard")],
+        ["画面/配音", completedStages.has("images_audio")],
+        ["输出合成", Boolean(run.manifest?.completedAt)],
+      ].map(([label, ok]) => pill(label + " " + (ok ? "已完成" : "未完成"), ok ? "good" : "warn")).join("");
+
+      statusPanelEl.innerHTML =
+        "<h3>当前执行</h3>" +
+        '<div class="pill-row">' +
+          pill(run.runId, "good") +
+          pill(run.isComplete ? "已完成" : "运行中", run.isComplete ? "good" : "warn") +
+        "</div>" +
+        '<div class="meta">开始时间：' + safe(run.startedAt || "未记录") + "</div>" +
+        '<div class="meta">完成时间：' + safe(run.completedAt || "未完成") + "</div>" +
+        '<div class="meta">视频模型：未接通</div>' +
+        '<div class="meta">当前输出：静态镜头 + 配音 + 字幕合成</div>' +
+        '<div class="pill-row" style="margin-top:8px">' + stagePills + "</div>";
     }
 
     function getRunData() {
@@ -520,8 +514,8 @@ function htmlPage() {
         storyText: run?.artifacts?.storyText || "",
         roleReferences: run?.manifest?.roleReferences || [],
         shots: run?.manifest?.shots || [],
-        finalVideo: run?.manifest?.outputs?.finalVideo
-          ? artifactUrl(run.runId, run.manifest.outputs.finalVideo)
+        outputVideo: (run?.manifest?.outputs?.outputVideo || run?.manifest?.outputs?.previewVideo || run?.manifest?.outputs?.finalVideo)
+          ? artifactUrl(run.runId, run.manifest.outputs.outputVideo || run.manifest.outputs.previewVideo || run.manifest.outputs.finalVideo)
           : "",
       };
     }
@@ -529,11 +523,11 @@ function htmlPage() {
     function renderOverview() {
       const run = state.currentRun;
       if (!run) {
-        appEl.innerHTML = empty("还没有运行记录。先在右侧选择模型并执行一条链路。");
+        appEl.innerHTML = empty("还没有当前结果。先在右侧输入故事并执行一条链路。");
         return;
       }
 
-      const { adaptation, shots, finalVideo } = getRunData();
+      const { adaptation, shots, outputVideo } = getRunData();
       const stageNames = ["adaptation", "characters", "role_reference", "storyboard", "images_audio", "final"];
       const completedStages = new Set((run.manifest?.stages || []).map((item) => item.stage));
       const stageBoxes = [
@@ -542,7 +536,7 @@ function htmlPage() {
         ["角色首图", "role_reference", run.modelMatrix?.primary?.roleImage || run.modelMatrix?.primary?.image],
         ["分镜", "storyboard", run.modelMatrix?.primary?.storyboard || run.modelMatrix?.primary?.text],
         ["镜头图/配音", "storyboard", run.modelMatrix?.primary?.shotImage || run.modelMatrix?.primary?.image],
-        ["成片", "final", run.manifest?.renderStrategy?.plannedVideoModel || "合成链路"],
+        ["输出合成", "final", "静态合成，视频模型未接通"],
       ].map(([label, key, model]) => {
         const ok = completedStages.has(key) || (key === "final" && run.manifest?.completedAt);
         return (
@@ -559,10 +553,10 @@ function htmlPage() {
       appEl.innerHTML =
         '<div class="hero-grid">' +
           '<div class="card">' +
-            "<h2>最终结果</h2>" +
-            '<div class="body">这里直接看样片。能不能播、有没有对上，是判断当前链路是否成立的最快入口。</div>' +
+            "<h2>当前输出</h2>" +
+            '<div class="body">这里显示的是静态镜头合成结果，只用来核对文本、角色、分镜、画面和配音有没有串起来。项目还没完成，因为视频模型还没接通。</div>' +
             '<div style="margin-top:14px">' +
-              (finalVideo ? '<video controls src="' + finalVideo + '"></video>' : empty("当前运行还没有成片。")) +
+              (outputVideo ? '<video controls src="' + outputVideo + '"></video>' : empty("当前运行还没有可播放输出。")) +
             "</div>" +
           "</div>" +
           '<div class="card stack">' +
@@ -577,8 +571,9 @@ function htmlPage() {
             '<div class="body">' + safe(adaptation?.logline || adaptation?.theme || "当前还没有可展示的剧情摘要。") + "</div>" +
             '<div class="stack">' +
               '<div class="meta">镜头数：' + shots.length + "</div>" +
-              '<div class="meta">样片时长：' + duration + "s</div>" +
+              '<div class="meta">输出时长：' + duration + "s</div>" +
               '<div class="meta">说明：' + safe(run.manifest?.renderStrategy?.note || "") + "</div>" +
+              '<div class="meta">状态：视频模型未接通，当前不是成片。</div>' +
             "</div>" +
           "</div>" +
         "</div>" +
@@ -693,21 +688,24 @@ function htmlPage() {
         "</div>";
     }
 
-    function renderPreview() {
+    function renderOutput() {
       const run = state.currentRun;
       if (!run) {
         appEl.innerHTML = empty("没有选中运行。");
         return;
       }
-      const { finalVideo, subtitles } = getRunData();
+      const { outputVideo, subtitles } = getRunData();
       appEl.innerHTML =
         '<div class="split">' +
           '<div class="card">' +
-            "<h2>最终成片</h2>" +
-            (finalVideo ? '<video controls src="' + finalVideo + '"></video>' : empty("当前还没有可播放成片。")) +
+            "<h2>当前输出（静态合成）</h2>" +
+            '<div class="body">这里只展示目前真实能跑出来的结果。视频模型未接通，所以这里不是成片。</div>' +
+            '<div style="margin-top:14px">' +
+            (outputVideo ? '<video controls src="' + outputVideo + '"></video>' : empty("当前还没有可播放输出。")) +
+            "</div>" +
           "</div>" +
           '<div class="card">' +
-            "<h2>字幕文件</h2>" +
+            "<h2>字幕与状态说明</h2>" +
             '<div class="text-block">' + safe(subtitles || "暂无字幕。") + "</div>" +
           "</div>" +
         "</div>";
@@ -719,7 +717,7 @@ function htmlPage() {
         script: renderScript,
         characters: renderCharacters,
         storyboard: renderStoryboard,
-        preview: renderPreview,
+        output: renderOutput,
       };
       const renderFn = map[state.currentTab] || renderOverview;
       renderFn();
@@ -727,7 +725,7 @@ function htmlPage() {
 
     function render() {
       renderTabs();
-      renderRunList();
+      renderStatusPanel();
       renderCenter();
     }
 
@@ -745,22 +743,6 @@ function htmlPage() {
       setSelectOptions(modelFields.storyboard, configData.modelOptions.text, configData.defaults.storyboard);
       setSelectOptions(modelFields.roleImage, configData.modelOptions.image, configData.defaults.roleImage);
       setSelectOptions(modelFields.shotImage, configData.modelOptions.image, configData.defaults.shotImage);
-      setSelectOptions(modelFields.shotVideo, configData.modelOptions.video, configData.defaults.shotVideo);
-    }
-
-    function fillCurrentRunConfig() {
-      const run = state.currentRun;
-      if (!run) {
-        return;
-      }
-      document.getElementById("storyInput").value = run.artifacts?.storyText || "";
-      const primary = run.modelMatrix?.primary || {};
-      if (primary.adaptation) modelFields.adaptation.value = primary.adaptation;
-      if (primary.characters) modelFields.characters.value = primary.characters;
-      if (primary.storyboard) modelFields.storyboard.value = primary.storyboard;
-      if (primary.roleImage) modelFields.roleImage.value = primary.roleImage;
-      if (primary.shotImage) modelFields.shotImage.value = primary.shotImage;
-      if (primary.shotVideo) modelFields.shotVideo.value = primary.shotVideo;
     }
 
     async function executeRun() {
@@ -772,7 +754,6 @@ function htmlPage() {
           storyboard: modelFields.storyboard.value,
           roleImage: modelFields.roleImage.value,
           shotImage: modelFields.shotImage.value,
-          shotVideo: modelFields.shotVideo.value,
         },
       };
 
@@ -792,9 +773,28 @@ function htmlPage() {
         runMessageEl.textContent = data.message || "启动失败。";
         return;
       }
-      runMessageEl.textContent = "已启动 run " + data.runId + "。模型慢的时候我不会卡在这里等，你可以自己刷新看进度。";
+      runMessageEl.textContent = "已启动 run " + data.runId + "。视频模型还没接通，所以这次只会生成前置链路结果。";
       await loadRuns();
       await loadRun(data.runId);
+    }
+
+    async function resetWorkspace() {
+      const yes = window.confirm("这会删除当前所有输出和生成过的故事输入。确定继续吗？");
+      if (!yes) {
+        return;
+      }
+      runMessageEl.textContent = "正在清空旧结果…";
+      const res = await fetch("/api/reset", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        runMessageEl.textContent = data.message || "清空失败。";
+        return;
+      }
+      state.runs = [];
+      state.currentRunId = null;
+      state.currentRun = null;
+      runMessageEl.textContent = "旧结果已清空。现在可以从空状态重新走一遍流程。";
+      render();
     }
 
     async function loadConfig() {
@@ -806,9 +806,7 @@ function htmlPage() {
     async function loadRuns() {
       const res = await fetch("/api/runs");
       state.runs = await res.json();
-      if (!state.currentRunId && state.runs[0]) {
-        state.currentRunId = state.runs[0].runId;
-      }
+      state.currentRunId = state.runs[0] ? state.runs[0].runId : null;
     }
 
     async function loadRun(runId) {
@@ -845,7 +843,7 @@ async function listRuns() {
           runId,
           startedAt: manifest.startedAt || null,
           completedAt: manifest.completedAt || null,
-          isComplete: Boolean(manifest.completedAt && manifest.outputs?.finalVideo),
+          isComplete: Boolean(manifest.completedAt && (manifest.outputs?.outputVideo || manifest.outputs?.previewVideo || manifest.outputs?.finalVideo)),
           statusText: manifest.completedAt ? "已完成" : "运行中",
         });
       } catch {
@@ -914,7 +912,7 @@ async function loadRun(runId) {
   if (!manifest.renderStrategy) {
     manifest.renderStrategy = {
       mode: "legacy",
-      note: "这是旧版运行结果，属于静帧合成链路。",
+      note: "这是旧版运行结果，属于静态镜头合成，不是真正的视频模型输出。",
       plannedVideoModel: modelMatrix?.primary?.shotVideo || "未配置",
     };
   }
@@ -965,7 +963,6 @@ async function startRun({ storyText, models }) {
         QINIU_STORYBOARD_MODEL: models.storyboard,
         QINIU_ROLE_IMAGE_MODEL: models.roleImage,
         QINIU_SHOT_IMAGE_MODEL: models.shotImage,
-        QINIU_VIDEO_MODEL: models.shotVideo,
       },
       stdio: "ignore",
       detached: true,
@@ -984,6 +981,14 @@ async function startRun({ storyText, models }) {
   child.on("error", cleanup);
 
   return { runId, storyPath };
+}
+
+async function resetWorkspace() {
+  await fs.rm(config.outputRoot, { recursive: true, force: true });
+  await fs.rm(path.join(config.workspaceRoot, "input", "generated"), { recursive: true, force: true });
+  await ensureDir(config.outputRoot);
+  await ensureDir(path.join(config.workspaceRoot, "input", "generated"));
+  runningJobs.clear();
 }
 
 function sendJson(res, payload, status = 200) {
@@ -1058,10 +1063,19 @@ const server = http.createServer(async (req, res) => {
           storyboard: models.storyboard || config.qiniu.models.storyboard,
           roleImage: models.roleImage || config.qiniu.models.roleImage,
           shotImage: models.shotImage || config.qiniu.models.shotImage,
-          shotVideo: models.shotVideo || config.qiniu.models.shotVideo,
         },
       });
       sendJson(res, result, 201);
+    } catch (error) {
+      sendJson(res, { message: error.message }, 500);
+    }
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/reset" && req.method === "POST") {
+    try {
+      await resetWorkspace();
+      sendJson(res, { ok: true });
     } catch (error) {
       sendJson(res, { message: error.message }, 500);
     }

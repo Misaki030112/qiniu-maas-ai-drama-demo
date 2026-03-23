@@ -24,6 +24,8 @@ export const config = {
   workspaceRoot,
   inputStoryPath: path.join(workspaceRoot, "input", "story.txt"),
   outputRoot: path.join(workspaceRoot, "output", "runs"),
+  projectDataRoot: path.join(workspaceRoot, ".data", "projects"),
+  projectOutputRoot: path.join(workspaceRoot, "output", "projects"),
   ffmpegPath: process.env.FFMPEG_PATH || ffmpegStatic,
   workbenchPort: Number(process.env.WORKBENCH_PORT || 3210),
   qiniu: {
