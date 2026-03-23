@@ -19,6 +19,17 @@ export class QiniuMaaSClient {
     };
   }
 
+  async listModels() {
+    const response = await fetch(`${this.baseUrl}/models`, {
+      headers: this.headers(),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `List models failed with ${response.status}`);
+    }
+    return payload.data || [];
+  }
+
   async chatJson({ model, systemPrompt, userPrompt, temperature = 0.6 }) {
     const response = await this.openai.chat.completions.create({
       model,
@@ -110,6 +121,87 @@ export class QiniuMaaSClient {
       ...payload,
       buffer: Buffer.from(payload.data, "base64"),
       durationMs: Number(payload?.addition?.duration || 0),
+    };
+  }
+
+  async createVideoTask({ model, prompt, imageBuffer, seconds = 5, aspectRatio = "16:9" }) {
+    if (model.startsWith("veo-")) {
+      const response = await fetch(`${this.baseUrl}/videos/generations`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          model,
+          instances: [
+            {
+              prompt,
+              image: imageBuffer
+                ? {
+                    bytesBase64Encoded: imageBuffer.toString("base64"),
+                    mimeType: "image/png",
+                  }
+                : undefined,
+              aspectRatio,
+            },
+          ],
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || `Video task creation failed with ${response.status}`);
+      }
+      return {
+        provider: "veo",
+        id: payload.id || payload.name,
+        raw: payload,
+      };
+    }
+
+    const response = await fetch(`${this.baseUrl}/videos`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({
+        model,
+        prompt,
+        seconds: Math.max(4, Math.min(10, Math.round(seconds))),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `Video task creation failed with ${response.status}`);
+    }
+    return {
+      provider: "openai",
+      id: payload.id,
+      raw: payload,
+    };
+  }
+
+  async getVideoTask({ model, provider, id }) {
+    const endpoint = provider === "veo"
+      ? `${this.baseUrl}/videos/generations/${id}`
+      : `${this.baseUrl}/videos/${id}`;
+    const response = await fetch(endpoint, {
+      headers: this.headers(),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `Video task query failed with ${response.status}`);
+    }
+
+    if (provider === "veo") {
+      const sample = payload.generatedSamples?.[0] || payload.videos?.[0] || null;
+      return {
+        status: payload.state || payload.status,
+        url: sample?.video?.uri || sample?.uri || "",
+        raw: payload,
+      };
+    }
+
+    const video = payload.output?.[0] || payload.data?.[0] || null;
+    return {
+      status: payload.status,
+      url: video?.url || video?.uri || "",
+      raw: payload,
     };
   }
 }

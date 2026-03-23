@@ -18,7 +18,7 @@ const stageDirs = {
   storyboard: ["05-storyboard"],
   media: ["06-images", "07-audio", "08-subtitles", "09-video"],
   output: ["09-video"],
-  video: [],
+  video: ["10-video-model"],
 };
 
 const stageDependencies = {
@@ -27,7 +27,7 @@ const stageDependencies = {
   storyboard: ["characters"],
   media: ["storyboard"],
   output: ["media"],
-  video: ["output"],
+  video: ["media"],
 };
 
 function slugifyName(name) {
@@ -50,12 +50,7 @@ function createStageState() {
     storyboard: { status: "idle", updatedAt: null, error: null },
     media: { status: "idle", updatedAt: null, error: null },
     output: { status: "idle", updatedAt: null, error: null },
-    video: {
-      status: "blocked",
-      updatedAt: null,
-      error: null,
-      note: "视频模型阶段尚未接入，当前不可执行。",
-    },
+    video: { status: "idle", updatedAt: null, error: null },
   };
 }
 
@@ -91,6 +86,7 @@ export function getProjectPaths(projectId) {
       audio: path.join(outputDir, "07-audio"),
       subtitles: path.join(outputDir, "08-subtitles"),
       video: path.join(outputDir, "09-video"),
+      videoModel: path.join(outputDir, "10-video-model"),
     },
   };
 }
@@ -106,15 +102,7 @@ export async function ensureProjectWorkspace(projectId) {
 }
 
 function refreshProjectReadiness(project) {
-  if (project.stageState.video.status !== "blocked") {
-    project.stageState.video.status = "blocked";
-    project.stageState.video.note = "视频模型阶段尚未接入，当前不可执行。";
-  }
-
   for (const stage of stageOrder) {
-    if (stage === "video") {
-      continue;
-    }
     const state = project.stageState[stage];
     if (state.status === "running" || state.status === "done" || state.status === "stale" || state.status === "error") {
       continue;
@@ -195,15 +183,6 @@ export async function listProjects() {
 }
 
 function markStageIdle(project, stage, stale = false) {
-  if (stage === "video") {
-    project.stageState.video = {
-      status: "blocked",
-      updatedAt: null,
-      error: null,
-      note: "视频模型阶段尚未接入，当前不可执行。",
-    };
-    return;
-  }
   project.stageState[stage] = {
     status: stale ? "stale" : "idle",
     updatedAt: null,
@@ -381,6 +360,9 @@ export async function readProjectDetail(projectId) {
       shots,
       outputVideoUrl: manifest?.outputs?.outputVideo
         ? `/api/projects/${projectId}/artifacts/${manifest.outputs.outputVideo}`
+        : "",
+      videoOutputUrl: manifest?.outputs?.videoOutput
+        ? `/api/projects/${projectId}/artifacts/${manifest.outputs.videoOutput}`
         : "",
     },
   };

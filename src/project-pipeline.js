@@ -148,6 +148,8 @@ function buildFallbackStoryboard(adaptation, charactersPayload) {
         "这件事今天必须推进，不然项目就没有下一步。",
       duration_sec: 5,
       image_prompt: `${scene.location || "办公室"}，${protagonist}处于强压力状态，准备推进项目，写实电影感，夜景职场氛围。`,
+      video_prompt: `${scene.location || "办公室"}内，${protagonist}从盯着数据到抬头做决定，轻微推镜，写实真人短剧风格。`,
+      negative_prompt: "卡通感、古装、多人混脸、肢体畸形、过曝",
     });
     shots.push({
       shot_id: `shot_${String(baseIndex + 1).padStart(2, "0")}`,
@@ -164,6 +166,8 @@ function buildFallbackStoryboard(adaptation, charactersPayload) {
         "先把链路跑通，再把效果一段一段补上，我们现在还有机会。",
       duration_sec: 5,
       image_prompt: `${scene.location || "办公室"}，${partner}与${protagonist}在深夜协作，屏幕灯光映在脸上，写实真人短剧风格。`,
+      video_prompt: `${scene.location || "办公室"}内，${partner}与${protagonist}快速对话并同时操作电脑，过肩镜头，节奏紧张。`,
+      negative_prompt: "卡通感、古装、多人混脸、肢体畸形、过曝",
     });
   });
 
@@ -348,6 +352,10 @@ async function burnSubtitles(videoPath, subtitlesPath, outputPath) {
     "copy",
     outputPath,
   ]);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function readOptionalJson(filePath) {
@@ -643,6 +651,7 @@ async function executeMedia(project, client, paths, manifest) {
       audioPath: path.relative(paths.outputDir, audioPath),
       segmentPath: path.relative(paths.outputDir, segmentPath),
       subtitle: shot.subtitle || shot.line,
+      videoPrompt: shot.video_prompt || shot.image_prompt,
     });
   }
 
@@ -709,16 +718,100 @@ async function executeOutput(project, paths, manifest) {
   upsertStageRecord(manifest, "output", "static-compose", "09-video/output.mp4");
 }
 
-function assertExecutable(project, stage) {
-  if (stage === "video") {
-    throw new Error("视频模型阶段还没有接通，所以当前不可执行。");
+async function pollVideoResult(client, model, provider, id) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const result = await client.getVideoTask({ model, provider, id });
+    const status = String(result.status || "").toLowerCase();
+    if (["succeeded", "success", "completed"].includes(status)) {
+      if (!result.url) {
+        throw new Error("视频任务已完成，但未返回下载地址。");
+      }
+      return result.url;
+    }
+    if (["failed", "error", "cancelled"].includes(status)) {
+      throw new Error(`视频任务失败: ${status}`);
+    }
+    await sleep(5000);
   }
+  throw new Error("视频任务轮询超时。");
+}
+
+async function executeVideo(project, client, paths, manifest) {
+  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
+  if (!storyboard?.shots?.length) {
+    throw new Error("请先完成分镜阶段。");
+  }
+
+  const shotOutputs = manifest.shots || [];
+  if (!shotOutputs.length) {
+    throw new Error("请先完成画面与配音阶段，确保已有镜头素材。");
+  }
+
+  const renderedVideoPaths = [];
+  for (let index = 0; index < shotOutputs.length; index += 1) {
+    const shotOutput = shotOutputs[index];
+    const storyboardShot = storyboard.shots[index] || {};
+    const imagePath = path.join(paths.outputDir, shotOutput.imagePath);
+    const localExt = path.extname(imagePath).toLowerCase();
+    const imageBuffer = [".png", ".jpg", ".jpeg"].includes(localExt)
+      ? await fs.readFile(imagePath)
+      : null;
+    const prompt = storyboardShot.video_prompt || shotOutput.videoPrompt || storyboardShot.image_prompt || storyboardShot.title || "写实真人短剧镜头";
+    const task = await client.createVideoTask({
+      model: project.models.shotVideo,
+      prompt,
+      imageBuffer,
+      seconds: Number(shotOutput.durationSec || storyboardShot.duration_sec || 5),
+    });
+    const downloadUrl = await pollVideoResult(client, project.models.shotVideo, task.provider, task.id);
+    const response = await fetch(downloadUrl);
+    if (!response.ok) {
+      throw new Error(`下载视频失败: ${response.status}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const outputPath = path.join(paths.dirs.videoModel, `${shotOutput.shotId}.mp4`);
+    await fs.writeFile(outputPath, buffer);
+    renderedVideoPaths.push(outputPath);
+    await writeJson(path.join(paths.dirs.videoModel, `${shotOutput.shotId}.meta.json`), {
+      model: project.models.shotVideo,
+      taskId: task.id,
+      provider: task.provider,
+      prompt,
+      downloadUrl,
+    });
+  }
+
+  const finalVideoPath = path.join(paths.dirs.videoModel, "output.mp4");
+  if (renderedVideoPaths.length === 1) {
+    await fs.copyFile(renderedVideoPaths[0], finalVideoPath);
+  } else {
+    const concatPath = path.join(paths.dirs.videoModel, "segments.txt");
+    await writeText(
+      concatPath,
+      renderedVideoPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
+    );
+    await concatSegments(concatPath, finalVideoPath);
+  }
+
+  manifest.outputs.videoOutput = "10-video-model/output.mp4";
+  manifest.runSummary = {
+    ...(manifest.runSummary || {}),
+    videoStage: {
+      plannedModel: project.models.shotVideo,
+      implemented: true,
+    },
+  };
+  upsertStageRecord(manifest, "video", project.models.shotVideo, "10-video-model/output.mp4");
+}
+
+function assertExecutable(project, stage) {
   const dependencies = {
     adaptation: [],
     characters: ["adaptation"],
     storyboard: ["characters"],
     media: ["storyboard"],
     output: ["media"],
+    video: ["media"],
   }[stage] || [];
   for (const dependency of dependencies) {
     if (project.stageState[dependency]?.status !== "done") {
@@ -757,6 +850,8 @@ export async function executeProjectStage(projectId, stage) {
       await executeMedia(project, client, paths, manifest);
     } else if (stage === "output") {
       await executeOutput(project, paths, manifest);
+    } else if (stage === "video") {
+      await executeVideo(project, client, paths, manifest);
     } else {
       throw new Error(`Unknown stage: ${stage}`);
     }

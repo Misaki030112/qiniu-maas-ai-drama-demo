@@ -48,7 +48,6 @@ export function ProjectSidebar() {
       <div className="sidebar__brand">
         <div className="sidebar__eyebrow">项目制工作台</div>
         <h1>点众 AI 真人剧</h1>
-        <p>左侧只做一件事：管理项目。进入项目后再做分阶段执行。</p>
       </div>
 
       <nav className="sidebar__nav">

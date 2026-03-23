@@ -66,6 +66,11 @@ npm run demo
 output/projects/<project-id>/
 ```
 
+Provider 默认值：
+
+- `MAAS_PROVIDER=qiniu` 时默认走 `https://api.qnaigc.com/v1`
+- `MAAS_PROVIDER=sufy` 时默认走 `https://api.sufy.com/aitoken/v1`
+
 ## 模型切换与对比
 
 在项目工作台中，每个阶段都可以切换模型。也可以直接在 `.env` 中修改默认值：
@@ -111,10 +116,10 @@ output/runs/<timestamp>/comparisons/image/
 ## 当前工作台逻辑
 
 - 左侧是项目列表，不再展示一堆历史 run。
-- 中间先输入故事，然后按阶段往下执行。
+- 中间是主工作区，顶部阶段标签切换 `剧本 / 主体 / 分镜 / 画面 / 成片`。
 - 每个阶段执行完都能看当前结果，并允许手动修改 `adaptation / characters / storyboard`。
 - 如果你修改上游阶段结果，下游阶段会自动失效，避免拿旧结果误判。
-- 视频模型阶段会显示在流程里，但当前明确是“待接入”，不会伪装成已经可用。
+- 成片页同时保留 `静态合成` 和 `视频生成` 两种执行方式。
 
 ## 协作方式
 
