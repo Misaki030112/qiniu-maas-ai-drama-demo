@@ -15,6 +15,10 @@ function isKlingImageModel(model) {
   return model.startsWith("kling-");
 }
 
+function needsKlingImageReference(model) {
+  return model === "kling-v1" || model === "kling-v1-5";
+}
+
 function toGeminiImageInput(item) {
   if (!item) return null;
   if (item.dataUri) return item.dataUri;
@@ -86,14 +90,18 @@ export function buildImageRequest({ model, prompt, aspectRatio = "16:9", referen
       if (!image) {
         throw new Error("Kling 单图生图缺少可用参考图。");
       }
+      const body = {
+        model,
+        prompt,
+        image,
+        aspect_ratio: aspectRatio,
+      };
+      if (needsKlingImageReference(model)) {
+        body.image_reference = "subject";
+      }
       return {
         endpoint: "/images/generations",
-        body: {
-          model,
-          prompt,
-          image,
-          aspect_ratio: aspectRatio,
-        },
+        body,
       };
     }
 
