@@ -21,6 +21,7 @@ import {
   ensureProjectWorkspace,
   getProjectPaths,
   normalizeCharacterStagePayload,
+  normalizeStoryboardPayload,
   readProject,
   readProjectDetail,
   writeProject,
@@ -688,6 +689,8 @@ async function executeStoryboard(project, client, paths, manifest, onProgress) {
     logger: manifest.logger,
     step: "storyboard_chat",
   });
+  const normalizedStoryboard = normalizeStoryboardPayload(storyboard, adaptation);
+  await writeJson(path.join(paths.dirs.storyboard, "storyboard.json"), normalizedStoryboard);
   upsertStageRecord(manifest, "storyboard", project.models.storyboard, "05-storyboard/storyboard.json");
   manifest.outputs.storyboard = "05-storyboard/storyboard.json";
   await runTextComparisons({
@@ -697,7 +700,7 @@ async function executeStoryboard(project, client, paths, manifest, onProgress) {
     outputDir: paths.outputDir,
     models: project.models.storyboard,
   });
-  return storyboard;
+  return normalizedStoryboard;
 }
 
 async function executeMedia(project, client, paths, manifest, onProgress) {

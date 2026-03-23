@@ -153,6 +153,101 @@ export function normalizeCharacterStagePayload(payload, adaptation = null) {
   };
 }
 
+function normalizeStoryboardItem(item, groupIndex, itemIndex) {
+  const safeGroup = groupIndex + 1;
+  const safeItem = itemIndex + 1;
+  return {
+    item_id: item?.item_id || item?.shot_id || `${safeGroup}-${safeItem}`,
+    shot_no: item?.shot_no || `${safeGroup}-${safeItem}`,
+    scene_name: item?.scene_name || item?.scene || item?.scene_title || item?.scene_id || "",
+    shot_size: item?.shot_size || item?.shot_type || item?.shot || item?.size || "",
+    composition: item?.composition || item?.framing || "",
+    camera_move: item?.camera_move || item?.camera || item?.movement || "",
+    lighting: item?.lighting || item?.light || "",
+    shot_description: item?.shot_description || item?.visual_focus || item?.description || item?.title || "",
+    sound_fx: item?.sound_fx || item?.sound || item?.ambience || "",
+    dialogue: item?.dialogue || item?.line || item?.subtitle || "",
+    duration_sec: Number(item?.duration_sec || item?.duration || 4),
+    speaker: item?.speaker || "",
+    image_prompt: item?.image_prompt || "",
+    video_prompt: item?.video_prompt || "",
+    negative_prompt: item?.negative_prompt || "",
+  };
+}
+
+function groupFromLegacyShot(shot, index) {
+  const item = normalizeStoryboardItem(shot, index, 0);
+  const title =
+    shot?.title ||
+    shot?.visual_focus ||
+    shot?.subtitle ||
+    shot?.line ||
+    `镜头${index + 1}`;
+  return {
+    group_id: shot?.group_id || `group_${index + 1}`,
+    title: `镜头${index + 1}`,
+    source_text: shot?.source_text || title,
+    order_index: index,
+    collapsed: false,
+    items: [item],
+  };
+}
+
+export function normalizeStoryboardPayload(payload, adaptation = null) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const rawGroups = Array.isArray(source.groups)
+    ? source.groups
+    : Array.isArray(source.shots)
+      ? source.shots.map(groupFromLegacyShot)
+      : [];
+
+  const groups = rawGroups.map((group, groupIndex) => {
+    const items = Array.isArray(group?.items)
+      ? group.items.map((item, itemIndex) => normalizeStoryboardItem(item, groupIndex, itemIndex))
+      : [normalizeStoryboardItem(group, groupIndex, 0)];
+
+    return {
+      group_id: group?.group_id || `group_${groupIndex + 1}`,
+      title: group?.title || `镜头${groupIndex + 1}`,
+      source_text:
+        group?.source_text ||
+        group?.summary ||
+        group?.title ||
+        adaptation?.chapters?.[0]?.summary ||
+        "",
+      order_index: Number(group?.order_index ?? groupIndex),
+      collapsed: Boolean(group?.collapsed),
+      items,
+    };
+  });
+
+  return {
+    style_guide: source.style_guide || {
+      visual_style: adaptation?.style_preset || "写实电影感",
+      continuity_rules: adaptation?.continuity_tokens || [],
+      negative_prompt: "角色漂移、场景漂移、道具消失、文字水印、卡通感",
+    },
+    groups,
+    shots: groups.flatMap((group) =>
+      group.items.map((item) => ({
+        shot_id: item.item_id,
+        scene_id: group.group_id,
+        title: group.title,
+        camera: item.camera_move,
+        visual_focus: item.shot_description,
+        transition: "",
+        speaker: item.speaker || "旁白",
+        line: item.dialogue || "",
+        subtitle: item.dialogue || "",
+        duration_sec: Number(item.duration_sec || 4),
+        image_prompt: item.image_prompt || item.shot_description || "",
+        video_prompt: item.video_prompt || item.shot_description || "",
+        negative_prompt: item.negative_prompt || "",
+      })),
+    ),
+  };
+}
+
 function normalizeProject(project) {
   return {
     ...project,
@@ -661,6 +756,11 @@ export async function saveProjectArtifact(projectId, stage, value) {
         value,
         await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")),
       )
+    : stage === "storyboard"
+      ? normalizeStoryboardPayload(
+          value,
+          await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")),
+        )
     : value;
 
   await writeJson(targetMap[stage], artifactValue);
@@ -708,6 +808,7 @@ export async function readProjectDetail(projectId) {
     reference_images: mapReferenceImages(projectId, item.reference_images),
   }));
   const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
+  const normalizedStoryboard = normalizeStoryboardPayload(storyboard, adaptation);
   const subtitles = await readOptionalText(path.join(paths.dirs.subtitles, "subtitles.srt"));
   const subjectReferences = (manifest?.subjectReferences || manifest?.roleReferences || []).map((item) => ({
     ...item,
@@ -736,7 +837,7 @@ export async function readProjectDetail(projectId) {
       storyText,
       adaptation,
       characters: normalizedCharacters,
-      storyboard,
+      storyboard: normalizedStoryboard,
       subtitles,
       subjectReferences,
       roleReferences,

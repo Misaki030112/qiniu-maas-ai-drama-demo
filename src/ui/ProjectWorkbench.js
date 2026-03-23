@@ -52,6 +52,12 @@ const ratioOptions = [
 ];
 const styleOptions = ["写实", "写实电影", "都市职场", "冷灰质感", "高压夜战"];
 
+const emptyStoryboardDraft = {
+  style_guide: {},
+  groups: [],
+  shots: [],
+};
+
 const stageDeps = {
   adaptation: [],
   characters: ["adaptation"],
@@ -220,6 +226,22 @@ function SideList({ tab, project }) {
     );
   }
 
+  if (tab === "storyboard" || tab === "media" || tab === "output") {
+    const chapters = deriveChapterList(project);
+    return (
+      <div className="studio-side-list">
+        {chapters.length
+          ? chapters.map((chapter) => (
+              <button key={chapter.key} type="button" className="studio-side-item">
+                <strong>{chapter.title}</strong>
+                <span>{chapter.detail}</span>
+              </button>
+            ))
+          : <EmptyCard title="暂无章节" detail="先完成剧本阶段" />}
+      </div>
+    );
+  }
+
   if (tab === "characters") {
     const characters = project?.artifacts?.characters?.characters || [];
     return (
@@ -272,33 +294,89 @@ function ScriptSummary({ adaptation }) {
   );
 }
 
-function ShotCards({ storyboard }) {
-  const shots = storyboard?.shots || [];
-  return shots.length ? (
-    <section className="studio-card-grid">
-      {shots.map((shot, index) => (
-        <article key={shot.shot_id || index} className="studio-card">
-          <div className="studio-card__top">
-            <strong>{shot.title || shot.shot_id || `镜头 ${index + 1}`}</strong>
-            <span>{shot.camera || "未填机位"}</span>
+function StoryboardBoard({
+  storyboard,
+  selectedItemId,
+  onSelectItem,
+  onToggleGroup,
+  onAddGroup,
+  onAddItem,
+  onDuplicateGroup,
+  onDeleteGroup,
+  onDuplicateItem,
+  onDeleteItem,
+}) {
+  const groups = storyboard?.groups || [];
+  return groups.length ? (
+    <section className="studio-storyboard-board">
+      <div className="studio-storyboard-head">
+        <div>
+          <h2>智能分镜</h2>
+          <span>按镜头组组织分镜条目，结构更接近制作工作台。</span>
+        </div>
+        <div className="studio-inline-actions">
+          <button type="button" disabled>导入分镜表</button>
+          <button type="button" disabled>导出分镜表</button>
+        </div>
+      </div>
+      {groups.map((group, groupIndex) => (
+        <article key={group.group_id || groupIndex} className="studio-storyboard-group">
+          <div className="studio-storyboard-group__header">
+            <button type="button" className="studio-storyboard-group__toggle" onClick={() => onToggleGroup(groupIndex)}>
+              <span>{group.collapsed ? "▸" : "▾"}</span>
+              <strong>{group.title || `镜头${groupIndex + 1}`}</strong>
+            </button>
+            <p>{group.source_text || "未填写剧情原句"}</p>
+            <div className="studio-inline-actions">
+              <button type="button" onClick={() => onDuplicateGroup(groupIndex)}>复制组</button>
+              <button type="button" onClick={() => onDeleteGroup(groupIndex)}>删除组</button>
+            </div>
           </div>
-          <p>{shot.visual_focus || "暂无镜头重点"}</p>
-          <dl className="studio-meta-list">
-            <div>
-              <dt>人物</dt>
-              <dd>{shot.speaker || "未填"}</dd>
-            </div>
-            <div>
-              <dt>时长</dt>
-              <dd>{shot.duration_sec || 0}s</dd>
-            </div>
-            <div>
-              <dt>字幕</dt>
-              <dd>{shot.subtitle || shot.line || "未填"}</dd>
-            </div>
-          </dl>
+          {!group.collapsed ? (
+            <>
+              <div className="studio-storyboard-table studio-storyboard-table--head">
+                <span>分镜号</span>
+                <span>场景</span>
+                <span>景别</span>
+                <span>构图</span>
+                <span>运镜</span>
+                <span>光影</span>
+                <span>分镜描述</span>
+                <span>音效</span>
+                <span>对白</span>
+                <span>时长</span>
+                <span>操作</span>
+              </div>
+              {(group.items || []).map((item) => (
+                <div key={item.item_id} className={item.item_id === selectedItemId ? "studio-storyboard-table active" : "studio-storyboard-table"}>
+                  <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--index" onClick={() => onSelectItem(item.item_id)}>
+                    {item.shot_no || item.item_id}
+                  </button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.scene_name || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.shot_size || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.composition || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.camera_move || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.lighting || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell studio-storyboard-row__cell--wide" onClick={() => onSelectItem(item.item_id)}>{item.shot_description || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.sound_fx || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{item.dialogue || "-"}</button>
+                  <button type="button" className="studio-storyboard-row__cell" onClick={() => onSelectItem(item.item_id)}>{Number(item.duration_sec || 0)}s</button>
+                  <div className="studio-inline-actions">
+                    <button type="button" onClick={() => onDuplicateItem(group.group_id, item.item_id)}>复制</button>
+                    <button type="button" onClick={() => onDeleteItem(group.group_id, item.item_id)}>删除</button>
+                  </div>
+                </div>
+              ))}
+              <button type="button" className="studio-storyboard-add" onClick={() => onAddItem(group.group_id)}>
+                + 添加分镜
+              </button>
+            </>
+          ) : null}
         </article>
       ))}
+      <button type="button" className="studio-storyboard-add studio-storyboard-add--group" onClick={onAddGroup}>
+        + 添加新镜头
+      </button>
     </section>
   ) : <EmptyCard title="当前还没有分镜结果" detail="先完成主体阶段。" />;
 }
@@ -779,6 +857,7 @@ export function ProjectWorkbench({ projectId }) {
   const [adaptationDraft, setAdaptationDraft] = useState(null);
   const [charactersDraft, setCharactersDraft] = useState(null);
   const [storyboardDraft, setStoryboardDraft] = useState(null);
+  const [selectedStoryboardItemId, setSelectedStoryboardItemId] = useState("");
   const [isPending, startTransition] = useTransition();
   const bootedRef = useRef(false);
 
@@ -791,7 +870,7 @@ export function ProjectWorkbench({ projectId }) {
     setModels(data.models || {});
     setAdaptationDraft(data.artifacts?.adaptation || { scenes: [] });
     setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
-    setStoryboardDraft(data.artifacts?.storyboard || { shots: [] });
+    setStoryboardDraft(data.artifacts?.storyboard || emptyStoryboardDraft);
     if (!bootedRef.current || !preserveTab) {
       setTab(nextTabFromProject(data));
       bootedRef.current = true;
@@ -853,6 +932,22 @@ export function ProjectWorkbench({ projectId }) {
     : subjectKind === "scene"
       ? project?.artifacts?.sceneReferences || []
       : project?.artifacts?.propReferences || [];
+  const storyboardGroups = storyboardDraft?.groups || [];
+  const storyboardItems = storyboardGroups.flatMap((group) => (group.items || []).map((item) => ({ ...item, group_id: group.group_id })));
+  const currentStoryboardItem = storyboardItems.find((item) => item.item_id === selectedStoryboardItemId) || null;
+
+  useEffect(() => {
+    if (tab !== "storyboard") {
+      return;
+    }
+    if (!storyboardItems.length) {
+      setSelectedStoryboardItemId("");
+      return;
+    }
+    if (!storyboardItems.some((item) => item.item_id === selectedStoryboardItemId)) {
+      setSelectedStoryboardItemId(storyboardItems[0].item_id);
+    }
+  }, [tab, storyboardItems, selectedStoryboardItemId]);
 
   function persistBase(nextMessage = "") {
     return fetch(`/api/projects/${projectId}`, {
@@ -885,7 +980,7 @@ export function ProjectWorkbench({ projectId }) {
     setProject(data);
     setAdaptationDraft(data.artifacts?.adaptation || { scenes: [] });
     setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
-    setStoryboardDraft(data.artifacts?.storyboard || { shots: [] });
+    setStoryboardDraft(data.artifacts?.storyboard || emptyStoryboardDraft);
     setMessage(nextMessage);
     return data;
   }
@@ -1100,6 +1195,192 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function updateStoryboardDraftState(mutator) {
+    setStoryboardDraft((current) => {
+      const next = deepClone(current || { style_guide: {}, groups: [], shots: [] });
+      mutator(next);
+      next.shots = (next.groups || []).flatMap((group) =>
+        (group.items || []).map((item) => ({
+          shot_id: item.item_id,
+          scene_id: group.group_id,
+          title: group.title,
+          camera: item.camera_move,
+          visual_focus: item.shot_description,
+          transition: "",
+          speaker: item.speaker || "旁白",
+          line: item.dialogue || "",
+          subtitle: item.dialogue || "",
+          duration_sec: Number(item.duration_sec || 4),
+          image_prompt: item.image_prompt || item.shot_description || "",
+          video_prompt: item.video_prompt || item.shot_description || "",
+          negative_prompt: item.negative_prompt || "",
+        })),
+      );
+      return next;
+    });
+  }
+
+  function toggleStoryboardGroup(index) {
+    updateStoryboardDraftState((draft) => {
+      draft.groups[index].collapsed = !draft.groups[index].collapsed;
+    });
+  }
+
+  function addStoryboardGroup() {
+    updateStoryboardDraftState((draft) => {
+      const nextIndex = (draft.groups?.length || 0) + 1;
+      const itemId = `${nextIndex}-1`;
+      const nextGroup = {
+        group_id: `group_${nextIndex}`,
+        title: `镜头${nextIndex}`,
+        source_text: "",
+        order_index: nextIndex - 1,
+        collapsed: false,
+        items: [{
+          item_id: itemId,
+          shot_no: itemId,
+          scene_name: "",
+          shot_size: "",
+          composition: "",
+          camera_move: "",
+          lighting: "",
+          shot_description: "",
+          sound_fx: "",
+          dialogue: "",
+          duration_sec: 4,
+          speaker: "",
+          image_prompt: "",
+          video_prompt: "",
+          negative_prompt: "",
+        }],
+      };
+      draft.groups = [...(draft.groups || []), nextGroup];
+      setSelectedStoryboardItemId(itemId);
+    });
+    setMessage("已新增镜头组，记得保存。");
+  }
+
+  function addStoryboardItem(groupId) {
+    updateStoryboardDraftState((draft) => {
+      const group = (draft.groups || []).find((item) => item.group_id === groupId);
+      if (!group) return;
+      const nextIndex = (group.items?.length || 0) + 1;
+      const prefix = String(group.title || "镜头").replace(/^镜头/, "");
+      const itemId = `${prefix || groupId}-${nextIndex}`;
+      group.items.push({
+        item_id: itemId,
+        shot_no: itemId,
+        scene_name: "",
+        shot_size: "",
+        composition: "",
+        camera_move: "",
+        lighting: "",
+        shot_description: "",
+        sound_fx: "",
+        dialogue: "",
+        duration_sec: 4,
+        speaker: "",
+        image_prompt: "",
+        video_prompt: "",
+        negative_prompt: "",
+      });
+      setSelectedStoryboardItemId(itemId);
+    });
+    setMessage("已添加分镜，记得保存。");
+  }
+
+  function duplicateStoryboardGroup(index) {
+    updateStoryboardDraftState((draft) => {
+      const source = draft.groups[index];
+      const clone = deepClone(source);
+      const nextIndex = draft.groups.length + 1;
+      clone.group_id = `group_${nextIndex}`;
+      clone.title = `镜头${nextIndex}`;
+      clone.items = (clone.items || []).map((item, itemIndex) => ({
+        ...item,
+        item_id: `${nextIndex}-${itemIndex + 1}`,
+        shot_no: `${nextIndex}-${itemIndex + 1}`,
+      }));
+      draft.groups.splice(index + 1, 0, clone);
+      setSelectedStoryboardItemId(clone.items?.[0]?.item_id || "");
+    });
+    setMessage("已复制镜头组，记得保存。");
+  }
+
+  function deleteStoryboardGroup(index) {
+    updateStoryboardDraftState((draft) => {
+      const [removed] = draft.groups.splice(index, 1);
+      if (removed?.items?.some((item) => item.item_id === selectedStoryboardItemId)) {
+        const next = draft.groups[index] || draft.groups[index - 1];
+        setSelectedStoryboardItemId(next?.items?.[0]?.item_id || "");
+      }
+    });
+    setMessage("已删除镜头组，记得保存。");
+  }
+
+  function duplicateStoryboardItem(groupId, itemId) {
+    updateStoryboardDraftState((draft) => {
+      const group = draft.groups.find((item) => item.group_id === groupId);
+      if (!group) return;
+      const index = group.items.findIndex((item) => item.item_id === itemId);
+      if (index === -1) return;
+      const clone = deepClone(group.items[index]);
+      clone.item_id = `${group.title.replace(/^镜头/, "") || "x"}-${group.items.length + 1}`;
+      clone.shot_no = clone.item_id;
+      group.items.splice(index + 1, 0, clone);
+      setSelectedStoryboardItemId(clone.item_id);
+    });
+    setMessage("已复制分镜，记得保存。");
+  }
+
+  function deleteStoryboardItem(groupId, itemId) {
+    updateStoryboardDraftState((draft) => {
+      const group = draft.groups.find((item) => item.group_id === groupId);
+      if (!group) return;
+      const index = group.items.findIndex((item) => item.item_id === itemId);
+      if (index === -1) return;
+      group.items.splice(index, 1);
+      if (!group.items.length) {
+        group.items.push({
+          item_id: `${group.title.replace(/^镜头/, "") || "x"}-1`,
+          shot_no: `${group.title.replace(/^镜头/, "") || "x"}-1`,
+          scene_name: "",
+          shot_size: "",
+          composition: "",
+          camera_move: "",
+          lighting: "",
+          shot_description: "",
+          sound_fx: "",
+          dialogue: "",
+          duration_sec: 4,
+          speaker: "",
+          image_prompt: "",
+          video_prompt: "",
+          negative_prompt: "",
+        });
+      }
+      if (selectedStoryboardItemId === itemId) {
+        setSelectedStoryboardItemId(group.items[0]?.item_id || "");
+      }
+    });
+    setMessage("已删除分镜，记得保存。");
+  }
+
+  function updateCurrentStoryboardItem(field, value) {
+    updateStoryboardDraftState((draft) => {
+      for (const group of draft.groups || []) {
+        const target = (group.items || []).find((item) => item.item_id === selectedStoryboardItemId);
+        if (!target) continue;
+        target[field] = field === "duration_sec" ? Number(value || 0) : value;
+        if (field === "shot_description") {
+          target.image_prompt = target.image_prompt || value;
+          target.video_prompt = target.video_prompt || value;
+        }
+        return;
+      }
+    });
+  }
+
   if (!project) {
     return <div className="project-loading">加载中</div>;
   }
@@ -1202,10 +1483,18 @@ export function ProjectWorkbench({ projectId }) {
 
           {tab === "storyboard" ? (
             <section className="studio-panel studio-main-panel">
-              <div className="studio-panel__header">
-                <h2>分镜结构</h2>
-              </div>
-              <ShotCards storyboard={storyboardDraft} />
+              <StoryboardBoard
+                storyboard={storyboardDraft}
+                selectedItemId={selectedStoryboardItemId}
+                onSelectItem={setSelectedStoryboardItemId}
+                onToggleGroup={toggleStoryboardGroup}
+                onAddGroup={addStoryboardGroup}
+                onAddItem={addStoryboardItem}
+                onDuplicateGroup={duplicateStoryboardGroup}
+                onDeleteGroup={deleteStoryboardGroup}
+                onDuplicateItem={duplicateStoryboardItem}
+                onDeleteItem={deleteStoryboardItem}
+              />
             </section>
           ) : null}
 
@@ -1411,10 +1700,74 @@ export function ProjectWorkbench({ projectId }) {
                   <button className="studio-primary" type="button" onClick={() => runStage("storyboard")} disabled={busy || !canRunStage(project, "storyboard", storyText)}>
                     生成分镜
                   </button>
-                  <button className="studio-secondary" type="button" onClick={() => setModalStage("storyboard")}>
-                    编辑分镜
+                  <button
+                    className="studio-secondary"
+                    type="button"
+                    onClick={() => {
+                      startTransition(async () => {
+                        try {
+                          await saveArtifact("storyboard", storyboardDraft, "分镜结构已保存");
+                        } catch (error) {
+                          setMessage(error.message || "保存失败");
+                        }
+                      });
+                    }}
+                    disabled={busy}
+                  >
+                    保存分镜
                   </button>
                 </div>
+                {currentStoryboardItem ? (
+                  <div className="studio-detail-editor">
+                    <span className="studio-section-label">{currentStoryboardItem.shot_no || currentStoryboardItem.item_id}</span>
+                    <label className="studio-field">
+                      <span>场景</span>
+                      <input value={currentStoryboardItem.scene_name || ""} onChange={(event) => updateCurrentStoryboardItem("scene_name", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>景别</span>
+                      <input value={currentStoryboardItem.shot_size || ""} onChange={(event) => updateCurrentStoryboardItem("shot_size", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>构图</span>
+                      <input value={currentStoryboardItem.composition || ""} onChange={(event) => updateCurrentStoryboardItem("composition", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>运镜</span>
+                      <input value={currentStoryboardItem.camera_move || ""} onChange={(event) => updateCurrentStoryboardItem("camera_move", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>光影</span>
+                      <textarea className="studio-textarea-small" value={currentStoryboardItem.lighting || ""} onChange={(event) => updateCurrentStoryboardItem("lighting", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>分镜描述</span>
+                      <textarea className="studio-textarea-small" value={currentStoryboardItem.shot_description || ""} onChange={(event) => updateCurrentStoryboardItem("shot_description", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>音效</span>
+                      <textarea className="studio-textarea-small" value={currentStoryboardItem.sound_fx || ""} onChange={(event) => updateCurrentStoryboardItem("sound_fx", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>对白</span>
+                      <textarea className="studio-textarea-small" value={currentStoryboardItem.dialogue || ""} onChange={(event) => updateCurrentStoryboardItem("dialogue", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>时长</span>
+                      <input type="number" value={currentStoryboardItem.duration_sec || 4} onChange={(event) => updateCurrentStoryboardItem("duration_sec", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>静帧提示词</span>
+                      <textarea className="studio-textarea-small" value={currentStoryboardItem.image_prompt || ""} onChange={(event) => updateCurrentStoryboardItem("image_prompt", event.target.value)} />
+                    </label>
+                    <label className="studio-field">
+                      <span>视频提示词</span>
+                      <textarea className="studio-textarea-small" value={currentStoryboardItem.video_prompt || ""} onChange={(event) => updateCurrentStoryboardItem("video_prompt", event.target.value)} />
+                    </label>
+                  </div>
+                ) : (
+                  <EmptyCard title="当前未选中分镜" detail="点击左侧表格中的分镜行后，在这里编辑。" />
+                )}
               </>
             ) : null}
 

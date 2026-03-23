@@ -535,6 +535,135 @@ video {
   gap: 12px;
 }
 
+.studio-storyboard-board {
+  display: grid;
+  gap: 18px;
+}
+
+.studio-storyboard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.studio-storyboard-head h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.studio-storyboard-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.studio-storyboard-group {
+  display: grid;
+  gap: 0;
+  border-radius: 22px;
+  background: rgba(24, 27, 32, 0.96);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.studio-storyboard-group__header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.studio-storyboard-group__header p {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.studio-storyboard-group__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+}
+
+.studio-storyboard-group__toggle strong {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.studio-storyboard-table {
+  display: grid;
+  grid-template-columns: 78px 92px 72px 92px 92px 1.1fr 1.8fr 120px 120px 64px 112px;
+  gap: 0;
+  align-items: stretch;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.studio-storyboard-table--head {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.studio-storyboard-table--head span {
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.studio-storyboard-table.active {
+  background: rgba(147, 239, 59, 0.07);
+}
+
+.studio-storyboard-row__cell {
+  min-width: 0;
+  padding: 14px 12px;
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  line-height: 1.6;
+}
+
+.studio-storyboard-row__cell:last-child {
+  border-right: none;
+}
+
+.studio-storyboard-row__cell--index {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.studio-storyboard-row__cell--wide {
+  white-space: normal;
+}
+
+.studio-storyboard-table .studio-inline-actions {
+  padding: 12px;
+  justify-content: flex-start;
+}
+
+.studio-storyboard-add {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: transparent;
+  color: var(--accent);
+  padding: 14px;
+  font-weight: 600;
+}
+
+.studio-storyboard-add--group {
+  border: 1px dashed var(--line-strong);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .studio-card-grid,
 .studio-shot-grid,
 .studio-subject-grid,
