@@ -1,6 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Project README
+  - name: 项目说明
     url: https://github.com/Misaki030112/qiniu-maas-ai-drama-demo
-    about: 先查看项目说明和运行方式
-
+    about: 先查看仓库定位、运行方式和当前路线图

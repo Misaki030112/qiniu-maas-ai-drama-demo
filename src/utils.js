@@ -31,14 +31,32 @@ export async function writeJson(filePath, value) {
   await writeText(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+export async function readJson(filePath) {
+  const content = await readText(filePath);
+  return JSON.parse(content);
+}
+
 export async function readText(filePath) {
   return fs.readFile(filePath, "utf8");
+}
+
+function tryParseJson(candidate) {
+  try {
+    return JSON.parse(candidate);
+  } catch (error) {
+    const repaired = candidate
+      .replace(/^\uFEFF/, "")
+      .replace(/[“”]/g, "\"")
+      .replace(/[‘’]/g, "\"")
+      .replace(/,\s*([}\]])/g, "$1");
+    return JSON.parse(repaired);
+  }
 }
 
 export function extractJson(text) {
   const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i);
   if (fencedMatch) {
-    return JSON.parse(fencedMatch[1]);
+    return tryParseJson(fencedMatch[1]);
   }
 
   const firstBrace = text.indexOf("{");
@@ -86,7 +104,7 @@ export function extractJson(text) {
     } else if (char === closeChar) {
       depth -= 1;
       if (depth === 0) {
-        return JSON.parse(text.slice(start, index + 1));
+        return tryParseJson(text.slice(start, index + 1));
       }
     }
   }
@@ -161,4 +179,3 @@ export function secondsToSrtTime(totalSeconds) {
   const pad = (value, size = 2) => String(value).padStart(size, "0");
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)},${pad(millis, 3)}`;
 }
-

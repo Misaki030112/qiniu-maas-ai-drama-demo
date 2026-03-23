@@ -1,7 +1,7 @@
 ---
-name: Bug report
+name: 缺陷反馈
 about: 记录链路故障、模型调用异常或结果回归
-title: "[Bug] "
+title: "[缺陷] "
 labels: bug
 assignees: ""
 ---
@@ -29,4 +29,3 @@ assignees: ""
 - 运行目录：
 - 相关文件：
 - 截图或日志：
-

@@ -6,6 +6,7 @@
   "scripts": {
     "demo": "node src/index.js",
     "start": "node src/index.js",
+    "workbench": "node src/workbench.js",
     "lint": "eslint src --ext .js"
   },
   "keywords": [],
