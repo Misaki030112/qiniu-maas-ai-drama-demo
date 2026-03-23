@@ -949,6 +949,65 @@ audio {
   box-shadow: var(--shadow);
 }
 
+.studio-log-list {
+  display: grid;
+  gap: 12px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.studio-log-item {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.studio-log-item.start {
+  border-color: rgba(147, 239, 59, 0.22);
+}
+
+.studio-log-item.done {
+  border-color: rgba(99, 200, 255, 0.22);
+}
+
+.studio-log-item.error {
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.studio-log-item__top,
+.studio-log-item__meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.studio-log-item__top strong {
+  font-size: 14px;
+}
+
+.studio-log-item__top span,
+.studio-log-item__meta span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.studio-log-item p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.studio-log-item__error {
+  color: var(--danger) !important;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .studio-spinner {
   width: 42px;
   height: 42px;

@@ -362,6 +362,26 @@ async function readOptionalText(filePath) {
   }
 }
 
+async function readOptionalJsonLines(filePath, limit = 200) {
+  const text = await readOptionalText(filePath);
+  if (!text.trim()) {
+    return [];
+  }
+
+  return text
+    .trim()
+    .split("\n")
+    .slice(-limit)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
 export async function readJob(jobId) {
   const result = await query(
     `SELECT * FROM ${schema}.jobs WHERE id = $1 LIMIT 1`,
@@ -614,6 +634,7 @@ export async function readProjectDetail(projectId) {
   const paths = getProjectPaths(projectId);
   const manifest = await readOptionalJson(paths.manifestPath);
   const modelMatrix = await readOptionalJson(paths.modelMatrixPath);
+  const logs = await readOptionalJsonLines(path.join(paths.dirs.logs, "pipeline.jsonl"));
   const storyText =
     project.storyText || (await readOptionalText(path.join(paths.dirs.input, "story.txt")));
   const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
@@ -642,6 +663,7 @@ export async function readProjectDetail(projectId) {
     ...project,
     manifest: manifest || null,
     modelMatrix: modelMatrix || null,
+    logs,
     currentJob,
     artifacts: {
       storyText,

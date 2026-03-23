@@ -982,31 +982,66 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
   }
 
   const manifest = await loadManifest(projectId, project);
-  const nextReference = await renderSubjectReference({
-    client,
-    model: project.models.roleImage,
-    subject: list[index],
-    kind,
-    paths,
-    index,
+  const logger = await createPipelineLogger({
+    projectId,
+    stage: "subject_reference",
+    outputDir: paths.outputDir,
   });
+  try {
+    await logger.log({
+      event: "stage",
+      step: `subject_reference:${kind}:${key}`,
+      status: "start",
+      model: project.models.roleImage,
+      provider: "image",
+      message: "开始重生成单个主体参考图",
+    });
+    const nextReference = await renderSubjectReference({
+      client,
+      model: project.models.roleImage,
+      subject: list[index],
+      kind,
+      paths,
+      index,
+      logger,
+    });
 
-  const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
-  manifest.subjectReferences = [
-    ...existingReferences.filter((item) => !(item.kind === kind && (item.key || item.name) === key)),
-    nextReference,
-  ];
-  manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
-  await saveManifest(projectId, manifest);
-  await saveModelMatrix(project, manifest);
+    const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
+    manifest.subjectReferences = [
+      ...existingReferences.filter((item) => !(item.kind === kind && (item.key || item.name) === key)),
+      nextReference,
+    ];
+    manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
+    await saveManifest(projectId, manifest);
+    await saveModelMatrix(project, manifest);
 
-  project.stageState.characters = {
-    status: "done",
-    updatedAt: new Date().toISOString(),
-    error: null,
-  };
-  await writeProject(project);
-  return readProjectDetail(projectId);
+    project.stageState.characters = {
+      status: "done",
+      updatedAt: new Date().toISOString(),
+      error: null,
+    };
+    await writeProject(project);
+    await logger.log({
+      event: "stage",
+      step: `subject_reference:${kind}:${key}`,
+      status: "done",
+      model: project.models.roleImage,
+      provider: "image",
+      message: "单个主体参考图生成完成",
+    });
+    return readProjectDetail(projectId);
+  } catch (error) {
+    await logger.log({
+      event: "stage",
+      step: `subject_reference:${kind}:${key}`,
+      status: "error",
+      model: project.models.roleImage,
+      provider: "image",
+      error: error.message,
+      message: "单个主体参考图生成失败",
+    });
+    throw error;
+  }
 }
 
 export async function renderAllSubjectReferences(projectId) {
@@ -1014,16 +1049,52 @@ export async function renderAllSubjectReferences(projectId) {
   const paths = await ensureProjectWorkspace(projectId);
   const client = new QiniuMaaSClient(config.qiniu);
   const manifest = await loadManifest(projectId, project);
-  await renderAllSubjectReferencesForProject(project, client, paths, manifest, null);
-  await saveManifest(projectId, manifest);
-  await saveModelMatrix(project, manifest);
-  project.stageState.characters = {
-    status: "done",
-    updatedAt: new Date().toISOString(),
-    error: null,
-  };
-  await writeProject(project);
-  return readProjectDetail(projectId);
+  const logger = await createPipelineLogger({
+    projectId,
+    stage: "subject_reference",
+    outputDir: paths.outputDir,
+  });
+  try {
+    await logger.log({
+      event: "stage",
+      step: "subject_reference:batch",
+      status: "start",
+      model: project.models.roleImage,
+      provider: "image",
+      message: "开始批量生成主体参考图",
+    });
+    manifest.logger = logger;
+    await renderAllSubjectReferencesForProject(project, client, paths, manifest, null);
+    delete manifest.logger;
+    await saveManifest(projectId, manifest);
+    await saveModelMatrix(project, manifest);
+    project.stageState.characters = {
+      status: "done",
+      updatedAt: new Date().toISOString(),
+      error: null,
+    };
+    await writeProject(project);
+    await logger.log({
+      event: "stage",
+      step: "subject_reference:batch",
+      status: "done",
+      model: project.models.roleImage,
+      provider: "image",
+      message: "批量主体参考图生成完成",
+    });
+    return readProjectDetail(projectId);
+  } catch (error) {
+    await logger.log({
+      event: "stage",
+      step: "subject_reference:batch",
+      status: "error",
+      model: project.models.roleImage,
+      provider: "image",
+      error: error.message,
+      message: "批量主体参考图生成失败",
+    });
+    throw error;
+  }
 }
 
 export function assertExecutable(project, stage) {

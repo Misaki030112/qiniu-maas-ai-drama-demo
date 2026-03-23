@@ -1,4 +1,6 @@
 import { extractJson, normalizeChatText } from "../utils.js";
+import { resolveImagePayload } from "./image-runtime.js";
+import { buildVideoTaskBody, parseVideoTaskResult } from "./video-runtime.js";
 
 export class QiniuMaaSClient {
   constructor(options) {
@@ -76,24 +78,11 @@ export class QiniuMaaSClient {
       );
     }
 
-    const item = payload?.data?.[0];
-    if (item?.b64_json) {
-      return {
-        ...payload,
-        buffer: Buffer.from(item.b64_json, "base64"),
-      };
-    }
-
-    if (item?.url) {
-      const download = await fetch(item.url);
-      const arrayBuffer = await download.arrayBuffer();
-      return {
-        ...payload,
-        buffer: Buffer.from(arrayBuffer),
-      };
-    }
-
-    throw new Error("Image response does not contain b64_json or url.");
+    return resolveImagePayload({
+      baseUrl: this.baseUrl,
+      headers: this.headers(),
+      payload,
+    });
   }
 
   async synthesizeSpeech({ text, voiceType, speedRatio = 1.0 }) {
@@ -158,14 +147,18 @@ export class QiniuMaaSClient {
       };
     }
 
+    const body = buildVideoTaskBody({
+      model,
+      prompt,
+      imageBuffer,
+      seconds,
+      aspectRatio,
+    });
+
     const response = await fetch(`${this.baseUrl}/videos`, {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({
-        model,
-        prompt,
-        seconds: Math.max(4, Math.min(10, Math.round(seconds))),
-      }),
+      body: JSON.stringify(body),
     });
     const payload = await response.json();
     if (!response.ok) {
@@ -190,20 +183,6 @@ export class QiniuMaaSClient {
       throw new Error(payload?.error?.message || `Video task query failed with ${response.status}`);
     }
 
-    if (provider === "veo") {
-      const sample = payload.generatedSamples?.[0] || payload.videos?.[0] || null;
-      return {
-        status: payload.state || payload.status,
-        url: sample?.video?.uri || sample?.uri || "",
-        raw: payload,
-      };
-    }
-
-    const video = payload.output?.[0] || payload.data?.[0] || null;
-    return {
-      status: payload.status,
-      url: video?.url || video?.uri || "",
-      raw: payload,
-    };
+    return parseVideoTaskResult({ provider, payload });
   }
 }

@@ -346,6 +346,138 @@ function OutputPanel({ project }) {
   );
 }
 
+function formatLogTime(value) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatDuration(durationMs) {
+  if (durationMs === undefined || durationMs === null) {
+    return "";
+  }
+  return durationMs >= 1000 ? `${(durationMs / 1000).toFixed(2)}s` : `${durationMs}ms`;
+}
+
+function translateLogStatus(status) {
+  return {
+    start: "开始",
+    done: "完成",
+    error: "失败",
+    queued: "排队中",
+    running: "执行中",
+    unknown: "未知",
+  }[status] || status || "未知";
+}
+
+function translateLogStage(stage) {
+  return {
+    adaptation: "剧本",
+    characters: "主体分析",
+    storyboard: "分镜",
+    media: "故事板",
+    output: "成片",
+    video: "视频",
+    subject_reference: "主体参考图",
+  }[stage] || stage || "";
+}
+
+function translateLogProvider(provider) {
+  return {
+    chat: "文本模型",
+    image: "图片模型",
+    video: "视频模型",
+    tts: "语音合成",
+    veo: "Veo",
+    openai: "OpenAI",
+  }[provider] || provider || "";
+}
+
+function translateLogStep(step) {
+  if (!step) {
+    return "执行事件";
+  }
+  if (step === "adaptation") return "剧本阶段";
+  if (step === "adaptation_chat") return "剧本生成";
+  if (step === "characters") return "主体分析阶段";
+  if (step === "characters_chat") return "主体分析";
+  if (step === "storyboard") return "分镜阶段";
+  if (step === "storyboard_chat") return "分镜生成";
+  if (step === "subject_reference:batch") return "批量生成主体参考图";
+  if (step.startsWith("subject_reference:")) {
+    const [, kind, name] = step.split(":");
+    const kindLabel = kind === "character" ? "角色" : kind === "scene" ? "场景" : kind === "prop" ? "道具" : kind;
+    return `生成${kindLabel}参考图${name ? `：${name}` : ""}`;
+  }
+  if (step.startsWith("shot_image:")) {
+    return `生成镜头图：${step.split(":")[1] || ""}`;
+  }
+  if (step.startsWith("tts:")) {
+    return `生成配音：${step.split(":")[1] || ""}`;
+  }
+  if (step.startsWith("video_task:")) {
+    return `创建视频任务：${step.split(":")[1] || ""}`;
+  }
+  if (step.startsWith("video_poll:")) {
+    return `轮询视频结果：${step.split(":")[1] || ""}`;
+  }
+  return step;
+}
+
+function ProjectLogPanel({ logs }) {
+  if (!logs?.length) {
+    return (
+      <section className="studio-panel studio-main-panel">
+        <div className="studio-panel__header">
+          <h2>执行日志</h2>
+        </div>
+        <EmptyCard title="暂无日志" detail="执行阶段任务或主体生图后会在这里显示链路日志。" />
+      </section>
+    );
+  }
+
+  const recentLogs = [...logs].reverse().slice(0, 80);
+  return (
+    <section className="studio-panel studio-main-panel">
+      <div className="studio-panel__header">
+        <h2>执行日志</h2>
+        <span className="studio-panel__meta">最近 {recentLogs.length} 条</span>
+      </div>
+      <div className="studio-log-list">
+        {recentLogs.map((entry, index) => (
+          <article key={`${entry.ts || "log"}-${index}`} className={`studio-log-item ${entry.status || "unknown"}`}>
+            <div className="studio-log-item__top">
+              <strong>{translateLogStep(entry.step || entry.event || "event")}</strong>
+              <span>{translateLogStatus(entry.status || "unknown")}</span>
+            </div>
+            <div className="studio-log-item__meta">
+              <span>{formatLogTime(entry.ts)}</span>
+              {entry.stage ? <span>阶段：{translateLogStage(entry.stage)}</span> : null}
+              {entry.model ? <span>模型：{entry.model}</span> : null}
+              {entry.provider ? <span>类型：{translateLogProvider(entry.provider)}</span> : null}
+              {entry.durationMs !== undefined ? <span>耗时：{formatDuration(entry.durationMs)}</span> : null}
+            </div>
+            {entry.message ? <p>{entry.message}</p> : null}
+            {entry.error ? <p className="studio-log-item__error">{entry.error}</p> : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SubjectTypeTabs({ payload, kind, onChange }) {
   return (
     <div className="studio-subject-tabs">
@@ -710,7 +842,7 @@ export function ProjectWorkbench({ projectId }) {
     const res = await fetch(`/api/projects/${projectId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ artifactStage: stage, artifactValue }),
+      body: JSON.stringify({ artifactStage: stage, artifactValue, models }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -818,6 +950,7 @@ export function ProjectWorkbench({ projectId }) {
       try {
         setLocalBusyText(regenerate ? "正在保存并重生成当前主体" : "正在保存当前主体");
         const latestDraft = deepClone(charactersDraft);
+        await persistBase();
         await saveArtifact("characters", latestDraft, regenerate ? "当前项已保存，准备重生成" : "当前项已保存");
         if (regenerate && currentSubject?.name) {
           const res = await fetch(`/api/projects/${projectId}/subjects/regenerate`, {
@@ -846,6 +979,7 @@ export function ProjectWorkbench({ projectId }) {
       try {
         setLocalBusyText("正在批量生成主体参考图");
         const latestDraft = deepClone(charactersDraft);
+        await persistBase();
         await saveArtifact("characters", latestDraft, "主体分析已保存");
         const res = await fetch(`/api/projects/${projectId}/subjects/render`, {
           method: "POST",
@@ -994,6 +1128,8 @@ export function ProjectWorkbench({ projectId }) {
           ) : null}
 
           {tab === "output" ? <OutputPanel project={project} /> : null}
+
+          <ProjectLogPanel logs={project.logs} />
 
           {busy ? (
             <div className="studio-loading-mask">

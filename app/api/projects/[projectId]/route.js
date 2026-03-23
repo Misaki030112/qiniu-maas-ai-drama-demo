@@ -15,6 +15,13 @@ export async function PATCH(request, { params }) {
     const { projectId } = await params;
     const body = await request.json().catch(() => ({}));
     if (body.artifactStage) {
+      if (body.name !== undefined || body.storyText !== undefined || body.models) {
+        await updateProject(projectId, {
+          name: body.name,
+          storyText: body.storyText,
+          models: body.models,
+        });
+      }
       return NextResponse.json(
         await saveProjectArtifact(projectId, body.artifactStage, body.artifactValue),
       );
