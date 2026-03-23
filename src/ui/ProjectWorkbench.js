@@ -1222,15 +1222,13 @@ export function ProjectWorkbench({ projectId }) {
 
           <ProjectLogPanel logs={project.logs} />
 
-          {busy ? (
-            <div className="studio-loading-mask">
-              <div className="studio-loading-card">
-                <div className="studio-spinner" />
-                <strong>{jobRunning && job?.status === "queued" ? "任务排队中" : "正在处理中"}</strong>
-                <span>{activeBusyText || "正在处理中"}</span>
-              </div>
+          <div className={busy ? "studio-loading-mask active" : "studio-loading-mask"} aria-hidden={!busy}>
+            <div className="studio-loading-card">
+              <div className="studio-spinner" />
+              <strong>{jobRunning && job?.status === "queued" ? "任务排队中" : "正在处理中"}</strong>
+              <span>{activeBusyText || "正在处理中"}</span>
             </div>
-          ) : null}
+          </div>
         </main>
 
         <aside className="studio-settings">

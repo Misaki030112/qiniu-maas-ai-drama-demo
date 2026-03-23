@@ -921,9 +921,19 @@ audio {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 12, 15, 0.72);
+  background: rgba(10, 12, 15, 0.42);
   border-radius: 22px;
-  backdrop-filter: blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.18s ease, visibility 0.18s ease;
+  will-change: opacity;
+}
+
+.studio-loading-mask.active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .studio-loading-card {
@@ -932,7 +942,7 @@ audio {
   min-width: 280px;
   padding: 22px 24px;
   border-radius: 20px;
-  background: #111419;
+  background: rgba(17, 20, 25, 0.96);
   border: 1px solid rgba(147, 239, 59, 0.24);
   text-align: center;
   box-shadow: var(--shadow);
