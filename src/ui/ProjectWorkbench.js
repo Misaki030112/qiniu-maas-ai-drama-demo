@@ -436,6 +436,41 @@ function translateLogStep(step) {
   return step;
 }
 
+function buildDisplayLogs(logs) {
+  const merged = [];
+
+  for (const entry of logs || []) {
+    const previous = merged[merged.length - 1];
+    const sameExecution =
+      previous &&
+      previous.step === entry.step &&
+      previous.status === entry.status &&
+      previous.stage === entry.stage &&
+      (previous.model || "") === (entry.model || "") &&
+      (previous.provider || "") === (entry.provider || "") &&
+      (previous.error || "") === (entry.error || "");
+
+    if (!sameExecution) {
+      merged.push({ ...entry });
+      continue;
+    }
+
+    merged[merged.length - 1] = {
+      ...previous,
+      ...entry,
+      event:
+        previous.event === entry.event
+          ? entry.event
+          : `${previous.event || ""}+${entry.event || ""}`.replace(/^\+|\+$/g, ""),
+      message: previous.message || entry.message,
+      durationMs: previous.durationMs ?? entry.durationMs,
+      ts: entry.ts || previous.ts,
+    };
+  }
+
+  return merged;
+}
+
 function ProjectLogPanel({ logs }) {
   if (!logs?.length) {
     return (
@@ -448,7 +483,7 @@ function ProjectLogPanel({ logs }) {
     );
   }
 
-  const recentLogs = [...logs].reverse().slice(0, 80);
+  const recentLogs = [...buildDisplayLogs(logs)].reverse().slice(0, 80);
   return (
     <section className="studio-panel studio-main-panel">
       <div className="studio-panel__header">

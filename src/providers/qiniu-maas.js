@@ -2,6 +2,18 @@ import { extractJson, normalizeChatText } from "../utils.js";
 import { buildImageRequest, resolveImagePayload } from "./image-runtime.js";
 import { buildVideoTaskBody, parseVideoTaskResult } from "./video-runtime.js";
 
+function normalizeProviderError(message, fallback) {
+  const text = String(message || fallback || "").trim();
+  const noChannelMatch = text.match(/no available channels for model\s+([^\s(]+)/i);
+  if (noChannelMatch) {
+    return `当前接入点未开通模型 ${noChannelMatch[1]}，请切换模型或更换接入点。原始错误：${text}`;
+  }
+  if (/^generate image failed$/i.test(text)) {
+    return `上游图片服务返回通用失败，当前无法从响应中判断更细原因。原始错误：${text}`;
+  }
+  return text || fallback;
+}
+
 export class QiniuMaaSClient {
   constructor(options) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -21,7 +33,7 @@ export class QiniuMaaSClient {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message || `List models failed with ${response.status}`);
+      throw new Error(normalizeProviderError(payload?.error?.message, `List models failed with ${response.status}`));
     }
     return payload.data || [];
   }
@@ -41,7 +53,7 @@ export class QiniuMaaSClient {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message || `Chat completion failed with ${response.status}`);
+      throw new Error(normalizeProviderError(payload?.error?.message, `Chat completion failed with ${response.status}`));
     }
 
     const rawText = normalizeChatText(payload?.choices?.[0]?.message?.content);
@@ -77,9 +89,10 @@ export class QiniuMaaSClient {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(
-        payload?.error?.message || `Image generation failed with ${response.status}`,
-      );
+      throw new Error(normalizeProviderError(
+        payload?.error?.message,
+        `Image generation failed with ${response.status}`,
+      ));
     }
 
     return resolveImagePayload({
@@ -107,9 +120,10 @@ export class QiniuMaaSClient {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(
-        payload?.error?.message || `Speech synthesis failed with ${response.status}`,
-      );
+      throw new Error(normalizeProviderError(
+        payload?.error?.message,
+        `Speech synthesis failed with ${response.status}`,
+      ));
     }
 
     return {
@@ -142,7 +156,10 @@ export class QiniuMaaSClient {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload?.error?.message || `Video task creation failed with ${response.status}`);
+        throw new Error(normalizeProviderError(
+          payload?.error?.message,
+          `Video task creation failed with ${response.status}`,
+        ));
       }
       return {
         provider: "veo",
@@ -166,7 +183,10 @@ export class QiniuMaaSClient {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message || `Video task creation failed with ${response.status}`);
+      throw new Error(normalizeProviderError(
+        payload?.error?.message,
+        `Video task creation failed with ${response.status}`,
+      ));
     }
     return {
       provider: "openai",
@@ -184,7 +204,10 @@ export class QiniuMaaSClient {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message || `Video task query failed with ${response.status}`);
+      throw new Error(normalizeProviderError(
+        payload?.error?.message,
+        `Video task query failed with ${response.status}`,
+      ));
     }
 
     return parseVideoTaskResult({ provider, payload });
