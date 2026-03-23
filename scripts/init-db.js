@@ -1,7 +1,9 @@
 import { databaseSchema, ensureSchema, getPool } from "../src/db.js";
+import { refreshModelCatalog } from "../src/model-catalog.js";
 
 async function main() {
   await ensureSchema();
+  await refreshModelCatalog();
   const pool = await getPool();
   const result = await pool.query(
     `

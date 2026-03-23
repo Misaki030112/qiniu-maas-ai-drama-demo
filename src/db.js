@@ -55,6 +55,16 @@ CREATE TABLE IF NOT EXISTS ${schema}.jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_project_created_at
   ON ${schema}.jobs(project_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS ${schema}.model_catalog (
+  model_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 COMMENT ON SCHEMA ${schema} IS '点众 AI 真人剧 Demo 业务数据';
 
 COMMENT ON TABLE ${schema}.projects IS '项目主表';
@@ -78,6 +88,15 @@ COMMENT ON COLUMN ${schema}.jobs.payload IS '任务附加数据';
 COMMENT ON COLUMN ${schema}.jobs.created_at IS '任务创建时间';
 COMMENT ON COLUMN ${schema}.jobs.started_at IS '任务开始时间';
 COMMENT ON COLUMN ${schema}.jobs.finished_at IS '任务结束时间';
+
+COMMENT ON TABLE ${schema}.model_catalog IS '模型目录表';
+COMMENT ON COLUMN ${schema}.model_catalog.model_id IS '模型ID';
+COMMENT ON COLUMN ${schema}.model_catalog.display_name IS '模型展示名称';
+COMMENT ON COLUMN ${schema}.model_catalog.provider IS '模型提供方';
+COMMENT ON COLUMN ${schema}.model_catalog.capabilities IS '模型能力标签';
+COMMENT ON COLUMN ${schema}.model_catalog.source IS '模型信息来源';
+COMMENT ON COLUMN ${schema}.model_catalog.metadata IS '模型附加信息';
+COMMENT ON COLUMN ${schema}.model_catalog.updated_at IS '目录更新时间';
 `;
 }
 

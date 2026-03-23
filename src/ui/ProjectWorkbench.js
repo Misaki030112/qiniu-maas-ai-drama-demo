@@ -17,18 +17,22 @@ const subjectKinds = [
   { id: "prop", label: "道具", key: "props" },
 ];
 
-const modelOptions = {
+const fallbackModelOptions = {
   adaptation: ["openai/gpt-5.4", "openai/gpt-5.4-mini", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324"],
   characters: ["openai/gpt-5.4", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
   storyboard: ["gemini-2.5-pro", "openai/gpt-5.4", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
   roleImage: ["imagen-4", "gemini-2.5-flash-image", "gpt-image-1", "minimax-image-01"],
   shotImage: ["imagen-4", "gemini-2.5-flash-image", "gpt-image-1", "minimax-image-01"],
-  shotVideo: ["veo-3.1-fast-generate-001", "veo-3.1-generate-001", "sora-2", "sora-2-pro", "kling-v3", "kling-v3-omni"],
+  shotVideo: ["veo-3.1-fast-generate-001", "veo-3.1-generate-001", "sora-2", "sora-2-pro", "kling-v3", "kling-v3-omni", "viduq3-turbo", "viduq3-pro"],
 };
 
-const ratioOptions = ["16:9", "9:16", "4:3", "3:4"];
+const ratioOptions = [
+  { value: "16:9", icon: "wide" },
+  { value: "9:16", icon: "vertical" },
+  { value: "4:3", icon: "classic" },
+  { value: "3:4", icon: "poster" },
+];
 const styleOptions = ["写实", "写实电影", "都市职场", "冷灰质感", "高压夜战"];
-const createModeOptions = ["生图转视频", "图像驱动视频", "视频优先"];
 
 const stageDeps = {
   adaptation: [],
@@ -86,6 +90,36 @@ function StatusDot({ status }) {
   return <span className={`studio-status-dot ${status || "idle"}`} />;
 }
 
+function buildModelOptions(modelCatalog) {
+  if (!modelCatalog?.length) {
+    return fallbackModelOptions;
+  }
+
+  const byCapability = (capability, fallback) => {
+    const items = modelCatalog
+      .filter((item) => item.capabilities?.includes(capability))
+      .map((item) => item.modelId);
+    return items.length ? items : fallback;
+  };
+
+  return {
+    adaptation: byCapability("script", fallbackModelOptions.adaptation),
+    characters: byCapability("subject_analysis", fallbackModelOptions.characters),
+    storyboard: byCapability("storyboard", fallbackModelOptions.storyboard),
+    roleImage: byCapability("subject_reference", fallbackModelOptions.roleImage),
+    shotImage: byCapability("shot_image", fallbackModelOptions.shotImage),
+    shotVideo: byCapability("video_generation", fallbackModelOptions.shotVideo),
+  };
+}
+
+function RatioPreview({ icon }) {
+  return (
+    <span className={`studio-ratio-icon ${icon}`}>
+      <span />
+    </span>
+  );
+}
+
 function StageStrip({ project }) {
   return (
     <div className="studio-stage-strip">
@@ -108,6 +142,23 @@ function EmptyCard({ title, detail }) {
     <div className="studio-placeholder-card">
       <strong>{title}</strong>
       {detail ? <span>{detail}</span> : null}
+    </div>
+  );
+}
+
+function ImagePreviewModal({ asset, onClose }) {
+  if (!asset?.url) {
+    return null;
+  }
+  return (
+    <div className="studio-modal-backdrop studio-modal-backdrop--image" onClick={onClose}>
+      <div className="studio-image-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="studio-panel__header">
+          <h2>{asset.title || "图片预览"}</h2>
+          <button className="studio-ghost" type="button" onClick={onClose}>关闭</button>
+        </div>
+        <img src={asset.url} alt={asset.title || "preview"} className="studio-image-modal__image" />
+      </div>
     </div>
   );
 }
@@ -324,6 +375,7 @@ function SubjectGrid({
   kind,
   selectedKey,
   onSelect,
+  onPreview,
   onCreate,
   onDuplicate,
   onDelete,
@@ -338,7 +390,12 @@ function SubjectGrid({
           <article key={`${item.name}-${index}`} className={active ? "studio-subject-card active" : "studio-subject-card"}>
             <button type="button" className="studio-subject-card__select" onClick={() => onSelect(item.name)}>
               <div className="studio-subject-card__media">
-                {ref?.url ? <img src={ref.url} alt={item.name} /> : <div className="studio-subject-card__placeholder">{kind === "character" ? "角色" : kind === "scene" ? "场景" : "道具"}</div>}
+                {ref?.url ? (
+                  <>
+                    <img src={ref.url} alt={item.name} />
+                    <span className="studio-subject-card__badge">{ref.model || "已生成"}</span>
+                  </>
+                ) : <div className="studio-subject-card__placeholder">{kind === "character" ? "角色" : kind === "scene" ? "场景" : "道具"}</div>}
               </div>
               <div className="studio-subject-card__body">
                 <strong>{item.name}</strong>
@@ -346,6 +403,8 @@ function SubjectGrid({
               </div>
             </button>
             <div className="studio-inline-actions">
+              <button type="button" onClick={() => onSelect(item.name)}>聚焦</button>
+              <button type="button" onClick={() => onPreview(ref, item.name)} disabled={!ref?.url}>看图</button>
               <button type="button" onClick={() => onMove(index, -1)} disabled={index === 0}>上移</button>
               <button type="button" onClick={() => onMove(index, 1)} disabled={index === items.length - 1}>下移</button>
               <button type="button" onClick={() => onDuplicate(index)}>复制</button>
@@ -526,10 +585,12 @@ export function ProjectWorkbench({ projectId }) {
   const [tab, setTab] = useState("script");
   const [storyText, setStoryText] = useState("");
   const [models, setModels] = useState({});
+  const [modelCatalog, setModelCatalog] = useState([]);
   const [message, setMessage] = useState("");
   const [localBusyText, setLocalBusyText] = useState("");
   const [subjectKind, setSubjectKind] = useState("character");
   const [selectedSubjectKey, setSelectedSubjectKey] = useState("");
+  const [previewAsset, setPreviewAsset] = useState(null);
   const [modalStage, setModalStage] = useState(null);
   const [adaptationDraft, setAdaptationDraft] = useState(null);
   const [charactersDraft, setCharactersDraft] = useState(null);
@@ -558,6 +619,17 @@ export function ProjectWorkbench({ projectId }) {
   }, [projectId]);
 
   useEffect(() => {
+    fetch("/api/model-catalog", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setModelCatalog(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!project?.currentJob || !["queued", "running"].includes(project.currentJob.status)) {
       return undefined;
     }
@@ -568,6 +640,7 @@ export function ProjectWorkbench({ projectId }) {
   }, [project?.id, project?.currentJob?.id, project?.currentJob?.status]);
 
   const currentKindConfig = subjectKinds.find((item) => item.id === subjectKind) || subjectKinds[0];
+  const modelOptions = useMemo(() => buildModelOptions(modelCatalog), [modelCatalog]);
   const subjectItems = useMemo(
     () => charactersDraft?.[currentKindConfig.key] || [],
     [charactersDraft, currentKindConfig.key],
@@ -774,6 +847,16 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function openPreview(reference, fallbackTitle) {
+    if (!reference?.url) {
+      return;
+    }
+    setPreviewAsset({
+      url: reference.url,
+      title: reference.name || fallbackTitle,
+    });
+  }
+
   if (!project) {
     return <div className="project-loading">加载中</div>;
   }
@@ -839,7 +922,14 @@ export function ProjectWorkbench({ projectId }) {
             <section className="studio-panel studio-main-panel">
               <div className="studio-panel__header">
                 <h2>主体资产</h2>
-                <span className="studio-panel__meta">分析主体后再批量生成参考图</span>
+                <div className="studio-inline-actions">
+                  <button type="button" onClick={() => runStage("characters")} disabled={busy || !canRunStage(project, "characters", storyText)}>
+                    重新分析主体
+                  </button>
+                  <button type="button" onClick={renderSubjectReferences} disabled={busy || project.stageState?.characters?.status !== "done"}>
+                    批量生成参考图
+                  </button>
+                </div>
               </div>
               <div className="studio-subject-steps">
                 <div className="studio-summary-card">
@@ -858,6 +948,7 @@ export function ProjectWorkbench({ projectId }) {
                 kind={subjectKind}
                 selectedKey={selectedSubjectKey}
                 onSelect={setSelectedSubjectKey}
+                onPreview={openPreview}
                 onCreate={createSubject}
                 onDuplicate={duplicateSubject}
                 onDelete={deleteSubject}
@@ -917,27 +1008,13 @@ export function ProjectWorkbench({ projectId }) {
                   <div className="studio-option-grid">
                     {ratioOptions.map((option) => (
                       <button
-                        key={option}
+                        key={option.value}
                         type="button"
-                        className={models.scriptRatio === option ? "studio-option-card active" : "studio-option-card"}
-                        onClick={() => setModels((current) => ({ ...current, scriptRatio: option }))}
+                        className={models.scriptRatio === option.value ? "studio-option-card active" : "studio-option-card"}
+                        onClick={() => setModels((current) => ({ ...current, scriptRatio: option.value }))}
                       >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="studio-field">
-                  <span>创作模式</span>
-                  <div className="studio-option-grid studio-option-grid--wide">
-                    {createModeOptions.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        className={models.scriptMode === option ? "studio-option-card active" : "studio-option-card"}
-                        onClick={() => setModels((current) => ({ ...current, scriptMode: option }))}
-                      >
-                        {option}
+                        <RatioPreview icon={option.icon} />
+                        <strong>{option.value}</strong>
                       </button>
                     ))}
                   </div>
@@ -987,18 +1064,20 @@ export function ProjectWorkbench({ projectId }) {
                     {modelOptions.roleImage.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
-                <div className="studio-action-stack">
-                  <button className="studio-secondary" type="button" onClick={() => runStage("characters")} disabled={busy || !canRunStage(project, "characters", storyText)}>
-                    重新分析主体
-                  </button>
-                  <button className="studio-primary" type="button" onClick={renderSubjectReferences} disabled={busy || project.stageState?.characters?.status !== "done"}>
-                    生成参考图
-                  </button>
-                </div>
 
                 {currentSubject ? (
                   <div className="studio-detail-editor">
                     <span className="studio-section-label">{currentSubject.name}</span>
+                    {currentReferences.find((item) => item.key === currentSubject.name)?.url ? (
+                      <button
+                        type="button"
+                        className="studio-current-preview"
+                        onClick={() => openPreview(currentReferences.find((item) => item.key === currentSubject.name), currentSubject.name)}
+                      >
+                        <img src={currentReferences.find((item) => item.key === currentSubject.name).url} alt={currentSubject.name} />
+                        <span>点击查看大图</span>
+                      </button>
+                    ) : null}
                     <label className="studio-field">
                       <span>{subjectKind === "character" ? "角色名" : subjectKind === "scene" ? "场景名" : "道具名"}</span>
                       <input value={currentSubject.name || ""} onChange={(event) => updateCurrentSubject("name", event.target.value)} />
@@ -1035,7 +1114,7 @@ export function ProjectWorkbench({ projectId }) {
                         保存当前项
                       </button>
                       <button className="studio-primary" type="button" onClick={() => saveCurrentSubject(true)} disabled={busy}>
-                        重生成当前项
+                        生成当前项图片
                       </button>
                     </div>
                   </div>
@@ -1142,6 +1221,8 @@ export function ProjectWorkbench({ projectId }) {
           isPending={isPending}
         />
       ) : null}
+
+      <ImagePreviewModal asset={previewAsset} onClose={() => setPreviewAsset(null)} />
     </section>
   );
 }
