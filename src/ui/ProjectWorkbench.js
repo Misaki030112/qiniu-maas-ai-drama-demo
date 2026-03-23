@@ -391,23 +391,6 @@ function RatioPreview({ icon }) {
   );
 }
 
-function StageStrip({ project }) {
-  return (
-    <div className="studio-stage-strip">
-      {tabs.map((item, index) => (
-        <div key={item.id} className="studio-stage-chip">
-          <span className="studio-stage-chip__index">{index + 1}</span>
-          <div>
-            <strong>{item.label}</strong>
-            <span>{stageStatusText(project?.stageState?.[item.stage]?.status)}</span>
-          </div>
-          <StatusDot status={project?.stageState?.[item.stage]?.status} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function EmptyCard({ title, detail }) {
   return (
     <div className="studio-placeholder-card">
@@ -1771,8 +1754,6 @@ export function ProjectWorkbench({ projectId }) {
         </aside>
 
         <main className="studio-main">
-          <StageStrip project={project} />
-
           {tab === "script" ? (
             <section className="studio-panel studio-main-panel">
               <div className="studio-panel__header">
