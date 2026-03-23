@@ -2,7 +2,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import ffmpegStatic from "ffmpeg-static";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const workspaceRoot = process.cwd();
 const providerPreset = process.env.MAAS_PROVIDER || "qiniu";
@@ -15,13 +15,6 @@ function parseList(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function parseBoolean(value, fallback = false) {
-  if (value === undefined) {
-    return fallback;
-  }
-  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
 export const config = {
@@ -104,5 +97,4 @@ export const config = {
       },
     ],
   },
-  allowFallbacks: parseBoolean(process.env.ALLOW_FALLBACKS, true),
 };

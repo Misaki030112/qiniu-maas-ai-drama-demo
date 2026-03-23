@@ -275,6 +275,7 @@ export function getProjectPaths(projectId) {
     manifestPath: path.join(outputDir, "manifest.json"),
     modelMatrixPath: path.join(outputDir, "model-matrix.json"),
     dirs: {
+      logs: path.join(outputDir, "00-logs"),
       input: path.join(outputDir, "01-input"),
       adaptation: path.join(outputDir, "02-adaptation"),
       characters: path.join(outputDir, "03-characters"),

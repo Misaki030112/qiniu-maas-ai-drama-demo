@@ -8,7 +8,6 @@ import {
   buildStoryboardMessages,
 } from "./pipeline/prompts.js";
 import {
-  createPlaceholderPpm,
   ensureDir,
   escapeSubtitlePath,
   readJson,
@@ -26,12 +25,19 @@ import {
   readProjectDetail,
   writeProject,
 } from "./project-store.js";
+import { createPipelineLogger } from "./pipeline-logger.js";
 
 async function reportProgress(onProgress, progressText, payload = null) {
   if (!onProgress) {
     return;
   }
   await onProgress({ progressText, payload });
+}
+
+function buildValidationError(message, details = {}) {
+  const error = new Error(message);
+  error.details = details;
+  return error;
 }
 
 function findCharacter(characters, speaker) {
@@ -64,37 +70,6 @@ function buildFinalImagePrompt(shot, characters, styleGuide) {
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-function uniqueNamesFromText(text) {
-  const stop = new Set([
-    "项目",
-    "样片",
-    "会议室",
-    "数据",
-    "剧情",
-    "角色",
-    "镜头",
-    "场景",
-    "场戏",
-    "深夜",
-    "真人剧",
-    "点众",
-    "科技",
-    "业务",
-    "模型",
-    "链路",
-    "旁白",
-  ]);
-  const matches = text.match(/[\u4e00-\u9fa5]{2,3}/g) || [];
-  const uniq = [];
-  for (const item of matches) {
-    if (stop.has(item) || uniq.includes(item)) {
-      continue;
-    }
-    uniq.push(item);
-  }
-  return uniq.slice(0, 2);
 }
 
 function collectScriptText(adaptation) {
@@ -178,43 +153,27 @@ function isLikelyCharacterName(name, adaptation) {
   return !banned.some((item) => name.includes(item));
 }
 
-function sanitizeCharacterPayload(payload, adaptation) {
+function validateCharacterPayload(payload, adaptation) {
   const candidates = extractCharacterCandidates(adaptation);
-  const next = {
-    ...payload,
-    characters: [...(payload.characters || [])],
-  };
-
-  next.characters = next.characters.map((item, index) => {
-    const fallbackName = candidates[index] || item.name || `角色${index + 1}`;
-    const name = isLikelyCharacterName(item.name, adaptation) ? item.name : fallbackName;
-    return {
-      ...item,
-      name,
-      reference_prompt: String(item.reference_prompt || "").replaceAll(item.name || "", name),
-      continuity_prompt: String(item.continuity_prompt || "").replaceAll(item.name || "", name),
-    };
-  });
-
-  if (!next.characters.length && candidates.length) {
-    next.characters = candidates.slice(0, 2).map((name, index) => ({
-      name,
-      role: `核心角色${index + 1}`,
-      gender: index === 0 ? "female" : "male",
-      age_range: index === 0 ? "28-35" : "26-33",
-      personality: ["清晰", "稳定"],
-      appearance: "角色外形待补充",
-      wardrobe: "稳定主造型待补充",
-      visual_anchor: ["主造型", "面部识别点"],
-      full_description: "",
-      reference_prompt: "",
-      continuity_prompt: `${name}，角色主造型稳定，脸部特征与服装轮廓保持一致。`,
-      negative_prompt: "卡通感、设定稿崩坏、三视图不统一、多人入镜",
-      voice_style: "自然",
-    }));
+  const characters = payload.characters || [];
+  if (!characters.length) {
+    throw buildValidationError("主体分析失败：AI 未返回任何角色。", {
+      expectedNames: candidates,
+    });
   }
 
-  return next;
+  const invalidNames = characters
+    .map((item) => item.name)
+    .filter((name) => !isLikelyCharacterName(name, adaptation));
+
+  if (invalidNames.length) {
+    throw buildValidationError("主体分析失败：AI 返回的角色名未在剧本正文中正确出现。", {
+      invalidNames,
+      expectedNames: candidates,
+    });
+  }
+
+  return payload;
 }
 
 function inferStyleFromAdaptation(adaptation) {
@@ -268,95 +227,6 @@ function buildProfessionalCharacterDescription({
   ].join("；");
 }
 
-function buildFallbackCharacters(adaptation) {
-  const [nameA = "主角甲", nameB = "主角乙"] = extractCharacterCandidates(adaptation);
-  const style = inferStyleFromAdaptation(adaptation);
-  return {
-    characters: [
-      {
-        name: nameA,
-        role: "核心角色A",
-        gender: "female",
-        age_range: "28-35",
-        personality: ["果断", "目标明确", "压住情绪推进结果"],
-        appearance: "主角型女性，造型干净利落，强调辨识度与镜头稳定性。",
-        wardrobe: "主色统一的成套服装，剪裁清晰，适合跨镜头稳定复用。",
-        visual_anchor: ["主造型清晰", "脸部辨识度高", "服装轮廓稳定"],
-        full_description: buildProfessionalCharacterDescription({
-          name: nameA,
-          gender: "female",
-          age: "28至35岁",
-          wardrobe: "服装为统一主色调的成套造型，版型利落，鞋履与配饰风格统一",
-          hairstyle: "发型整洁，发丝走向清晰，适合长时间连续出镜",
-          face: "脸型与五官比例稳定，眉眼鼻唇特征明确，肤质细节自然",
-          figure: "体型匀称，身高比例自然",
-          accessories: "可带一到两件稳定配饰用于角色识别",
-          style,
-        }),
-        reference_prompt: `${nameA}，${style}风格专业角色设定图，左区正脸特写，右区标准三视图，同一角色一致性严格锁定。`,
-        continuity_prompt:
-          `${nameA}，${style}风格，角色主造型稳定，脸部特征、发型、服装轮廓和配饰保持一致。`,
-        negative_prompt: "卡通感、设定稿崩坏、三视图不统一、多人入镜、畸形手脚、年龄漂移、服装漂移",
-        voice_style: "克制、清晰、有识别度",
-      },
-      {
-        name: nameB,
-        role: "核心角色B",
-        gender: "male",
-        age_range: "26-33",
-        personality: ["冷静", "理性", "执行稳定"],
-        appearance: "主角型男性，面部识别点明确，整体造型适合连续生成。",
-        wardrobe: "轮廓明确的稳定服装组合，便于跨镜头保持一致。",
-        visual_anchor: ["轮廓稳定", "面部识别点明确", "服装主造型固定"],
-        full_description: buildProfessionalCharacterDescription({
-          name: nameB,
-          gender: "male",
-          age: "26至33岁",
-          wardrobe: "服装为稳定主造型，版型清晰，鞋履和配件统一",
-          hairstyle: "短发或中短发，轮廓利落，发型识别度明确",
-          face: "脸型与五官比例稳定，眉眼鼻唇特征清楚，肤质真实",
-          figure: "体型自然，站姿稳定，比例清晰",
-          accessories: "可保留一到两处高识别细节",
-          style,
-        }),
-        reference_prompt: `${nameB}，${style}风格专业角色设定图，左区正脸特写，右区标准三视图，同一角色一致性严格锁定。`,
-        continuity_prompt:
-          `${nameB}，${style}风格，角色主造型稳定，脸部特征、发型、服装轮廓和配饰保持一致。`,
-        negative_prompt: "卡通感、设定稿崩坏、三视图不统一、多人入镜、畸形手脚、年龄漂移、服装漂移",
-        voice_style: "沉稳、清晰、有节制",
-      },
-    ],
-    scenes: (adaptation.subject_hints?.scenes?.length ? adaptation.subject_hints.scenes : [inferSceneName(adaptation, 0)]).slice(0, 3).map((scene, index) => {
-      const sceneName = typeof scene === "string" ? scene : scene.name || inferSceneName(adaptation, index);
-      const location = typeof scene === "string" ? scene : scene.location || sceneName;
-      return {
-        name: sceneName,
-        location,
-        description: `${location}，用于承接剧情推进的核心场景。`,
-        full_description:
-          `8K画质，${style}风格，电影级摄影；无人物；${location}，空间结构完整，主色调统一，材质和陈设清晰，具备可重复复用的稳定环境元素；构图重心明确，适合后续镜头持续使用。`,
-        reference_prompt:
-          `8K画质，${style}风格，电影级摄影，${location}，无人物，环境结构完整，主体陈设清晰。`,
-        continuity_prompt: `${location}，${style}风格，空间结构和关键陈设稳定，适合后续镜头复用。`,
-        negative_prompt: "卡通感、环境崩坏、材质错误、悬浮家具、人物误入、畸形透视",
-      };
-    }),
-    props: [0, 1].map((index) => {
-      const propName = inferPropName(adaptation, index);
-      return {
-        name: propName,
-        description: `${propName}，用于剧情推进的关键道具。`,
-        full_description:
-          `8K画质，${style}风格，电影级摄影；纯净背景，道具设定图；${propName}，材质、颜色、结构细节清晰，标准三视图横向排列，完整展示正面、侧面、背面或关键结构视角。`,
-        reference_prompt:
-          `8K画质，${style}风格，道具设定图，${propName}，纯净背景，标准三视图，结构完整。`,
-        continuity_prompt: `${propName}，${style}风格道具特写，材质清晰，结构稳定，适合后续镜头重复出现。`,
-        negative_prompt: "卡通感、悬浮道具、材质错误、尺寸异常、结构崩坏、纹理乱码",
-      };
-    }),
-  };
-}
-
 function buildSubjectPrompt(subject, kind) {
   const prompt = subject.reference_prompt || subject.full_description || subject.continuity_prompt || "";
   if (kind === "character") {
@@ -386,132 +256,51 @@ function buildSubjectPrompt(subject, kind) {
   ].filter(Boolean).join(" ");
 }
 
-function subjectStem(subject, fallback) {
-  return String(subject.name || fallback).replaceAll(/\s+/g, "_");
+function subjectStem(subject, defaultName) {
+  return String(subject.name || defaultName).replaceAll(/\s+/g, "_");
 }
 
-async function renderSubjectReference({ client, model, subject, kind, paths, index }) {
+async function renderSubjectReference({ client, model, subject, kind, paths, index, logger }) {
   const safeName = subjectStem(subject, `${kind}_${index + 1}`);
   const prompt = buildSubjectPrompt(subject, kind);
   await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
 
-  let status = "ok";
-  let imagePath = `${safeName}.png`;
-  try {
-    const image = await client.generateImage({
-      model,
-      prompt,
-    });
-    await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
-    await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
-      model,
-      usage: image.usage || null,
-      kind,
-      name: subject.name,
-    });
-  } catch (error) {
-    if (!config.allowFallbacks) {
-      throw error;
-    }
-    status = "fallback";
-    imagePath = `${safeName}.ppm`;
-    await createPlaceholderPpm(path.join(paths.dirs.roleReference, imagePath), index);
-    await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
-      model,
-      status,
-      kind,
-      name: subject.name,
-      message: error.message,
-    });
-  }
+  const imagePath = `${safeName}.png`;
+  const image = logger
+    ? await logger.measure(
+        {
+          event: "ai",
+          step: `subject_reference:${kind}:${subject.name}`,
+          model,
+          provider: "image",
+        },
+        () => client.generateImage({
+          model,
+          prompt,
+        }),
+      )
+    : await client.generateImage({
+        model,
+        prompt,
+      });
+  await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
+  await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
+    model,
+    usage: image.usage || null,
+    kind,
+    name: subject.name,
+    status: "ok",
+  });
 
   return {
     key: subject.name,
     name: subject.name,
     role: subject.role || kind,
     kind,
-    status,
+    status: "ok",
     imagePath,
     promptPath: `${safeName}.prompt.txt`,
     model,
-  };
-}
-
-function buildFallbackStoryboard(adaptation, charactersPayload) {
-  const chapters = adaptation.chapters || [];
-  const characters = charactersPayload.characters || [];
-  const protagonist = characters[0]?.name || "主角甲";
-  const partner = characters[1]?.name || "主角乙";
-  const style = adaptation?.style_preset || "写实";
-  const shots = [];
-
-  const units = chapters.length
-    ? chapters.slice(0, 3).map((chapter, index) => ({
-        scene_id: chapter.chapter_id || `chapter_${index + 1}`,
-        title: chapter.title || `段落${index + 1}`,
-        objective: chapter.summary || chapter.content || "剧情推进",
-        conflict: chapter.summary || "局势继续升级",
-      }))
-    : [
-        {
-          scene_id: "chapter_1",
-          title: adaptation.title || "剧情推进",
-          objective: adaptation.logline || adaptation.script_text || "角色在压力下推进任务",
-          conflict: adaptation.ending_hook || "时间压力和结果压力叠加",
-        },
-      ];
-
-  units.forEach((scene, index) => {
-    const baseIndex = index * 2 + 1;
-    shots.push({
-      shot_id: `shot_${String(baseIndex).padStart(2, "0")}`,
-      scene_id: scene.scene_id || `scene_${index + 1}`,
-      title: `${scene.title || "剧情推进"}-压力镜头`,
-      camera: "中近景，轻微推镜",
-      visual_focus: scene.conflict || scene.objective || "角色在压力下作决定",
-      speaker: protagonist,
-      line:
-        scene.conflict ||
-        scene.objective ||
-        "这件事今天必须推进，不然项目就没有下一步。",
-      subtitle:
-        scene.conflict ||
-        scene.objective ||
-        "这件事今天必须推进，不然项目就没有下一步。",
-      duration_sec: 5,
-      image_prompt: `${scene.title || "核心场景"}，${protagonist}处于强压力状态，准备推进关键决定，${style}风格，电影感构图。`,
-      video_prompt: `${scene.title || "核心场景"}内，${protagonist}从压住情绪到做出决定，轻微推镜，${style}风格，人物状态变化清晰。`,
-      negative_prompt: "卡通感、古装、多人混脸、肢体畸形、过曝",
-    });
-    shots.push({
-      shot_id: `shot_${String(baseIndex + 1).padStart(2, "0")}`,
-      scene_id: scene.scene_id || `scene_${index + 1}`,
-      title: `${scene.title || "剧情推进"}-协作镜头`,
-      camera: "双人对话，过肩镜头",
-      visual_focus: scene.turning_point || "两人形成共识并继续推进",
-      speaker: partner,
-      line:
-        scene.turning_point ||
-        "先把链路跑通，再把效果一段一段补上，我们现在还有机会。",
-      subtitle:
-        scene.turning_point ||
-        "先把链路跑通，再把效果一段一段补上，我们现在还有机会。",
-      duration_sec: 5,
-      image_prompt: `${scene.title || "核心场景"}，${partner}与${protagonist}协作推进，${style}风格，人物关系明确。`,
-      video_prompt: `${scene.title || "核心场景"}内，${partner}与${protagonist}快速对话并同步行动，过肩镜头，${style}风格，节奏紧张。`,
-      negative_prompt: "卡通感、古装、多人混脸、肢体畸形、过曝",
-    });
-  });
-
-  return {
-    style_guide: {
-      visual_style: `${style}风格，电影级摄影，人物一致性优先`,
-      continuity_rules: [
-        `${protagonist}保持主造型和面部特征一致`,
-        `${partner}保持主造型和面部特征一致`,
-      ],
-    },
-    shots: shots.slice(0, 6),
   };
 }
 
@@ -521,14 +310,29 @@ async function saveChatStage({
   messages,
   stageDir,
   fileStem,
-  fallbackFactory,
+  logger,
+  step,
 }) {
   try {
-    const result = await client.chatJson({
-      model,
-      systemPrompt: messages.system,
-      userPrompt: messages.user,
-    });
+    const result = logger
+      ? await logger.measure(
+          {
+            event: "ai",
+            step: step || fileStem,
+            model,
+            provider: "chat",
+          },
+          () => client.chatJson({
+            model,
+            systemPrompt: messages.system,
+            userPrompt: messages.user,
+          }),
+        )
+      : await client.chatJson({
+          model,
+          systemPrompt: messages.system,
+          userPrompt: messages.user,
+        });
 
     await writeText(path.join(stageDir, `${fileStem}.raw.txt`), result.rawText);
     await writeJson(path.join(stageDir, `${fileStem}.json`), result.parsed);
@@ -541,18 +345,13 @@ async function saveChatStage({
 
     return result.parsed;
   } catch (error) {
-    if (!config.allowFallbacks || !fallbackFactory) {
-      throw error;
-    }
-    const fallback = fallbackFactory();
-    await writeText(path.join(stageDir, `${fileStem}.raw.txt`), `FALLBACK\n\n${error.message}\n`);
-    await writeJson(path.join(stageDir, `${fileStem}.json`), fallback);
+    await writeText(path.join(stageDir, `${fileStem}.raw.txt`), `ERROR\n\n${error.message}\n`);
     await writeJson(path.join(stageDir, `${fileStem}.meta.json`), {
       model,
-      status: "fallback",
+      status: "error",
       message: error.message,
     });
-    return fallback;
+    throw error;
   }
 }
 
@@ -587,23 +386,6 @@ async function runTextComparisons({ client, stageName, messages, outputDir, mode
       });
     }
   }
-}
-
-async function renderSilentAudio(outputPath, seconds) {
-  await runCommand(config.ffmpegPath, [
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    "anullsrc=r=44100:cl=stereo",
-    "-t",
-    String(seconds),
-    "-q:a",
-    "9",
-    "-acodec",
-    "libmp3lame",
-    outputPath,
-  ]);
 }
 
 async function renderSegment({ imagePath, audioPath, outputPath, durationSec }) {
@@ -768,6 +550,8 @@ async function executeAdaptation(project, client, paths, manifest, onProgress) {
     messages,
     stageDir: paths.dirs.adaptation,
     fileStem: "adaptation",
+    logger: manifest.logger,
+    step: "adaptation_chat",
   });
   upsertStageRecord(manifest, "adaptation", project.models.adaptation, "02-adaptation/adaptation.json");
   manifest.outputs.adaptation = "02-adaptation/adaptation.json";
@@ -794,9 +578,10 @@ async function analyzeSubjects(project, client, paths, manifest, onProgress) {
     messages,
     stageDir: paths.dirs.characters,
     fileStem: "characters",
-    fallbackFactory: () => buildFallbackCharacters(adaptation),
+    logger: manifest.logger,
+    step: "characters_chat",
   });
-  const subjectPayload = sanitizeCharacterPayload(
+  const subjectPayload = validateCharacterPayload(
     normalizeCharacterStagePayload(payload, adaptation),
     adaptation,
   );
@@ -837,6 +622,7 @@ async function renderAllSubjectReferencesForProject(project, client, paths, mani
       kind,
       paths,
       index,
+      logger: manifest.logger,
     }));
   }
   manifest.subjectReferences = subjectReferences;
@@ -859,7 +645,8 @@ async function executeStoryboard(project, client, paths, manifest, onProgress) {
     messages,
     stageDir: paths.dirs.storyboard,
     fileStem: "storyboard",
-    fallbackFactory: () => buildFallbackStoryboard(adaptation, characters),
+    logger: manifest.logger,
+    step: "storyboard_chat",
   });
   upsertStageRecord(manifest, "storyboard", project.models.storyboard, "05-storyboard/storyboard.json");
   manifest.outputs.storyboard = "05-storyboard/storyboard.json";
@@ -904,59 +691,61 @@ async function executeMedia(project, client, paths, manifest, onProgress) {
     const audioPath = path.join(paths.dirs.audio, `${shotId}.mp3`);
     const segmentPath = path.join(paths.dirs.video, `${shotId}.mp4`);
     let imagePath = `${imageBase}.png`;
-    let imageStatus = "ok";
-    let audioStatus = "ok";
+    const imageStatus = "ok";
+    const audioStatus = "ok";
 
     await writeText(path.join(paths.dirs.images, `${shotId}.prompt.txt`), prompt);
 
-    try {
-      const imageResult = await client.generateImage({
-        model: project.models.shotImage,
-        prompt,
-      });
-      await fs.writeFile(imagePath, imageResult.buffer);
-      await writeJson(path.join(paths.dirs.images, `${shotId}.meta.json`), {
-        model: project.models.shotImage,
-        usage: imageResult.usage || null,
-      });
-    } catch (error) {
-      if (!config.allowFallbacks) {
-        throw error;
-      }
-      imageStatus = "fallback";
-      imagePath = `${imageBase}.ppm`;
-      await createPlaceholderPpm(imagePath, index);
-      await writeJson(path.join(paths.dirs.images, `${shotId}.meta.json`), {
-        model: project.models.shotImage,
-        status: "fallback",
-        message: error.message,
-      });
-    }
+    const imageResult = manifest.logger
+      ? await manifest.logger.measure(
+          {
+            event: "ai",
+            step: `shot_image:${shotId}`,
+            model: project.models.shotImage,
+            provider: "image",
+          },
+          () => client.generateImage({
+            model: project.models.shotImage,
+            prompt,
+          }),
+        )
+      : await client.generateImage({
+          model: project.models.shotImage,
+          prompt,
+        });
+    await fs.writeFile(imagePath, imageResult.buffer);
+    await writeJson(path.join(paths.dirs.images, `${shotId}.meta.json`), {
+      model: project.models.shotImage,
+      usage: imageResult.usage || null,
+      status: "ok",
+    });
 
     let durationSec = Number(shot.duration_sec || 5);
-    try {
-      const ttsResult = await client.synthesizeSpeech({
-        text: shot.line || shot.subtitle,
-        voiceType: resolveVoice(shot.speaker, characters),
-      });
-      await fs.writeFile(audioPath, ttsResult.buffer);
-      durationSec = Math.max(durationSec, (ttsResult.durationMs || 0) / 1000 + 0.35);
-      await writeJson(path.join(paths.dirs.audio, `${shotId}.meta.json`), {
-        voiceType: resolveVoice(shot.speaker, characters),
-        durationMs: ttsResult.durationMs,
-        reqid: ttsResult.reqid,
-      });
-    } catch (error) {
-      if (!config.allowFallbacks) {
-        throw error;
-      }
-      audioStatus = "fallback";
-      await renderSilentAudio(audioPath, durationSec);
-      await writeJson(path.join(paths.dirs.audio, `${shotId}.meta.json`), {
-        status: "fallback",
-        message: error.message,
-      });
-    }
+    const ttsResult = manifest.logger
+      ? await manifest.logger.measure(
+          {
+            event: "ai",
+            step: `tts:${shotId}`,
+            model: resolveVoice(shot.speaker, characters),
+            provider: "tts",
+          },
+          () => client.synthesizeSpeech({
+            text: shot.line || shot.subtitle,
+            voiceType: resolveVoice(shot.speaker, characters),
+          }),
+        )
+      : await client.synthesizeSpeech({
+          text: shot.line || shot.subtitle,
+          voiceType: resolveVoice(shot.speaker, characters),
+        });
+    await fs.writeFile(audioPath, ttsResult.buffer);
+    durationSec = Math.max(durationSec, (ttsResult.durationMs || 0) / 1000 + 0.35);
+    await writeJson(path.join(paths.dirs.audio, `${shotId}.meta.json`), {
+      voiceType: resolveVoice(shot.speaker, characters),
+      durationMs: ttsResult.durationMs,
+      reqid: ttsResult.reqid,
+      status: "ok",
+    });
 
     await renderSegment({
       imagePath,
@@ -1053,7 +842,7 @@ async function executeOutput(project, paths, manifest, onProgress) {
 }
 
 async function pollVideoResult(client, model, provider, id) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  while (true) {
     const result = await client.getVideoTask({ model, provider, id });
     const status = String(result.status || "").toLowerCase();
     if (["succeeded", "success", "completed"].includes(status)) {
@@ -1067,7 +856,6 @@ async function pollVideoResult(client, model, provider, id) {
     }
     await sleep(5000);
   }
-  throw new Error("视频任务轮询超时。");
 }
 
 async function executeVideo(project, client, paths, manifest, onProgress) {
@@ -1096,13 +884,38 @@ async function executeVideo(project, client, paths, manifest, onProgress) {
       total: shotOutputs.length,
       shotId: shotOutput.shotId,
     });
-    const task = await client.createVideoTask({
-      model: project.models.shotVideo,
-      prompt,
-      imageBuffer,
-      seconds: Number(shotOutput.durationSec || storyboardShot.duration_sec || 5),
-    });
-    const downloadUrl = await pollVideoResult(client, project.models.shotVideo, task.provider, task.id);
+    const task = manifest.logger
+      ? await manifest.logger.measure(
+          {
+            event: "ai",
+            step: `video_task:${shotOutput.shotId}`,
+            model: project.models.shotVideo,
+            provider: "video",
+          },
+          () => client.createVideoTask({
+            model: project.models.shotVideo,
+            prompt,
+            imageBuffer,
+            seconds: Number(shotOutput.durationSec || storyboardShot.duration_sec || 5),
+          }),
+        )
+      : await client.createVideoTask({
+          model: project.models.shotVideo,
+          prompt,
+          imageBuffer,
+          seconds: Number(shotOutput.durationSec || storyboardShot.duration_sec || 5),
+        });
+    const downloadUrl = manifest.logger
+      ? await manifest.logger.measure(
+          {
+            event: "ai",
+            step: `video_poll:${shotOutput.shotId}`,
+            model: project.models.shotVideo,
+            provider: task.provider,
+          },
+          () => pollVideoResult(client, project.models.shotVideo, task.provider, task.id),
+        )
+      : await pollVideoResult(client, project.models.shotVideo, task.provider, task.id);
     const response = await fetch(downloadUrl);
     if (!response.ok) {
       throw new Error(`下载视频失败: ${response.status}`);
@@ -1244,6 +1057,18 @@ export async function runProjectStage(projectId, stage, options = {}) {
     const paths = await ensureProjectWorkspace(projectId);
     const client = new QiniuMaaSClient(config.qiniu);
     const manifest = await loadManifest(projectId, project);
+    const logger = await createPipelineLogger({
+      projectId,
+      stage,
+      outputDir: paths.outputDir,
+    });
+    manifest.logger = logger;
+    await logger.log({
+      event: "stage",
+      step: stage,
+      status: "start",
+      message: "阶段开始执行",
+    });
 
     if (stage === "adaptation") {
       await executeAdaptation(project, client, paths, manifest, onProgress);
@@ -1278,6 +1103,13 @@ export async function runProjectStage(projectId, stage, options = {}) {
       updatedAt: new Date().toISOString(),
       error: null,
     };
+    await logger.log({
+      event: "stage",
+      step: stage,
+      status: "done",
+      message: "阶段执行完成",
+    });
+    delete manifest.logger;
     await saveManifest(projectId, manifest);
     await saveModelMatrix(project, manifest);
     await writeProject(project);
@@ -1289,6 +1121,21 @@ export async function runProjectStage(projectId, stage, options = {}) {
       error: error.message,
     };
     await writeProject(project);
+    try {
+      const paths = await ensureProjectWorkspace(projectId);
+      const logger = await createPipelineLogger({
+        projectId,
+        stage,
+        outputDir: paths.outputDir,
+      });
+      await logger.log({
+        event: "stage",
+        step: stage,
+        status: "error",
+        error: error.message,
+        message: "阶段执行失败",
+      });
+    } catch {}
     throw error;
   }
 }

@@ -1,15 +1,9 @@
-import OpenAI from "openai";
 import { extractJson, normalizeChatText } from "../utils.js";
 
 export class QiniuMaaSClient {
   constructor(options) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
-    this.openai = new OpenAI({
-      apiKey: this.apiKey,
-      baseURL: this.baseUrl,
-      timeout: 60000,
-    });
   }
 
   headers() {
@@ -31,16 +25,24 @@ export class QiniuMaaSClient {
   }
 
   async chatJson({ model, systemPrompt, userPrompt, temperature = 0.6 }) {
-    const response = await this.openai.chat.completions.create({
-      model,
-      temperature,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({
+        model,
+        temperature,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
     });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `Chat completion failed with ${response.status}`);
+    }
 
-    const rawText = normalizeChatText(response.choices[0]?.message?.content);
+    const rawText = normalizeChatText(payload?.choices?.[0]?.message?.content);
     let parsed;
     try {
       parsed = extractJson(rawText);
@@ -52,8 +54,8 @@ export class QiniuMaaSClient {
       model,
       rawText,
       parsed,
-      usage: response.usage || null,
-      responseId: response.id || null,
+      usage: payload?.usage || null,
+      responseId: payload?.id || null,
     };
   }
 

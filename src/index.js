@@ -8,7 +8,6 @@ import {
   buildStoryboardMessages,
 } from "./pipeline/prompts.js";
 import {
-  createPlaceholderPpm,
   ensureDir,
   escapeSubtitlePath,
   makeRunId,
@@ -69,132 +68,12 @@ function buildFinalImagePrompt(shot, characters, styleGuide) {
     .join(" ");
 }
 
-function uniqueNamesFromText(text) {
-  const stop = new Set([
-    "项目",
-    "样片",
-    "会议室",
-    "数据",
-    "剧情",
-    "角色",
-    "镜头",
-    "场景",
-    "场戏",
-    "深夜",
-    "真人剧",
-    "点众",
-    "科技",
-    "业务",
-    "模型",
-    "链路",
-    "旁白",
-  ]);
-  const matches = text.match(/[\u4e00-\u9fa5]{2,3}/g) || [];
-  const uniq = [];
-  for (const item of matches) {
-    if (stop.has(item) || uniq.includes(item)) {
-      continue;
-    }
-    uniq.push(item);
-  }
-  return uniq.slice(0, 2);
-}
-
-function buildFallbackCharacters(adaptation) {
-  const source = JSON.stringify(adaptation);
-  const [nameA = "主角甲", nameB = "主角乙"] = uniqueNamesFromText(source);
-  return {
-    characters: [
-      {
-        name: nameA,
-        role: "内容负责人",
-        gender: "female",
-        age_range: "28-35",
-        personality: ["强势", "目标导向", "对结果敏感"],
-        appearance: "都市职业女性，利落长发或低马尾，深色西装或衬衫，状态紧绷但有执行力。",
-        continuity_prompt:
-          `${nameA}，都市职业女性，深色西装，利落发型，写实真人短剧风格，情绪克制但有压迫感。`,
-        voice_style: "冷静、克制、带压力感",
-      },
-      {
-        name: nameB,
-        role: "AI 产品 / 技术负责人",
-        gender: "male",
-        age_range: "26-33",
-        personality: ["理性", "抗压", "执行快"],
-        appearance: "年轻男性，简单衬衫或卫衣，略疲惫但专注，职场夜战状态。",
-        continuity_prompt:
-          `${nameB}，年轻男性，衬衫或卫衣，眼神专注，轻微疲惫感，写实真人短剧风格。`,
-        voice_style: "沉稳、理性、略带疲惫",
-      },
-    ],
-  };
-}
-
-function buildFallbackStoryboard(adaptation, charactersPayload) {
-  const scenes = adaptation.scenes || [];
-  const characters = charactersPayload.characters || [];
-  const protagonist = characters[0]?.name || "主角甲";
-  const partner = characters[1]?.name || "主角乙";
-  const shots = [];
-
-  scenes.slice(0, 3).forEach((scene, index) => {
-    const baseIndex = index * 2 + 1;
-    shots.push({
-      shot_id: `shot_${String(baseIndex).padStart(2, "0")}`,
-      scene_id: scene.scene_id || `scene_${index + 1}`,
-      title: `${scene.title || "剧情推进"}-压力镜头`,
-      camera: "中近景，轻微推镜",
-      visual_focus: scene.conflict || scene.objective || "角色在压力下作决定",
-      speaker: protagonist,
-      line:
-        scene.conflict ||
-        scene.objective ||
-        "这件事今天必须推进，不然项目就没有下一步。",
-      subtitle:
-        scene.conflict ||
-        scene.objective ||
-        "这件事今天必须推进，不然项目就没有下一步。",
-      duration_sec: 5,
-      image_prompt: `${scene.location || "办公室"}，${protagonist}处于强压力状态，准备推进项目，写实电影感，夜景职场氛围。`,
-    });
-    shots.push({
-      shot_id: `shot_${String(baseIndex + 1).padStart(2, "0")}`,
-      scene_id: scene.scene_id || `scene_${index + 1}`,
-      title: `${scene.title || "剧情推进"}-协作镜头`,
-      camera: "双人对话，过肩镜头",
-      visual_focus: scene.turning_point || "两人形成共识并继续推进",
-      speaker: partner,
-      line:
-        scene.turning_point ||
-        "先把链路跑通，再把效果一段一段补上，我们现在还有机会。",
-      subtitle:
-        scene.turning_point ||
-        "先把链路跑通，再把效果一段一段补上，我们现在还有机会。",
-      duration_sec: 5,
-      image_prompt: `${scene.location || "办公室"}，${partner}与${protagonist}在深夜协作，屏幕灯光映在脸上，写实真人短剧风格。`,
-    });
-  });
-
-  return {
-    style_guide: {
-      visual_style: "写实电影感真人短剧，都市夜景，冷暖对比灯光",
-      continuity_rules: [
-        `${protagonist}保持职业装与高压状态`,
-        `${partner}保持轻微疲惫但专注的技术负责人形象`,
-      ],
-    },
-    shots: shots.slice(0, 6),
-  };
-}
-
 async function saveChatStage({
   client,
   model,
   messages,
   stageDir,
   fileStem,
-  fallbackFactory,
 }) {
   try {
     const result = await client.chatJson({
@@ -214,21 +93,13 @@ async function saveChatStage({
 
     return result.parsed;
   } catch (error) {
-    if (!config.allowFallbacks || !fallbackFactory) {
-      throw error;
-    }
-    const fallback = fallbackFactory();
-    await writeText(
-      path.join(stageDir, `${fileStem}.raw.txt`),
-      `FALLBACK\n\n${error.message}\n`,
-    );
-    await writeJson(path.join(stageDir, `${fileStem}.json`), fallback);
+    await writeText(path.join(stageDir, `${fileStem}.raw.txt`), `ERROR\n\n${error.message}\n`);
     await writeJson(path.join(stageDir, `${fileStem}.meta.json`), {
       model,
-      status: "fallback",
+      status: "error",
       message: error.message,
     });
-    return fallback;
+    throw error;
   }
 }
 
@@ -268,23 +139,6 @@ async function runTextComparisons({ client, stageName, messages, runDir }) {
   }
 
   return results;
-}
-
-async function renderSilentAudio(outputPath, seconds) {
-  await runCommand(config.ffmpegPath, [
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    "anullsrc=r=44100:cl=stereo",
-    "-t",
-    String(seconds),
-    "-q:a",
-    "9",
-    "-acodec",
-    "libmp3lame",
-    outputPath,
-  ]);
 }
 
 async function renderSegment({ imagePath, audioPath, outputPath, durationSec }) {
@@ -390,37 +244,24 @@ async function generateRoleReferenceImages({
     const imagePath = path.join(outputDir, `${safeName}.png`);
     const promptPath = path.join(outputDir, `${safeName}.prompt.txt`);
     await writeText(promptPath, prompt);
-    let status = "ok";
-    try {
-      const image = await client.generateImage({
-        model: config.qiniu.models.roleImage,
-        prompt,
-      });
-      await fs.writeFile(imagePath, image.buffer);
-      await writeJson(path.join(outputDir, `${safeName}.meta.json`), {
-        model: config.qiniu.models.roleImage,
-        usage: image.usage || null,
-        outputFormat: image.output_format || "png",
-      });
-    } catch (error) {
-      if (!config.allowFallbacks) {
-        throw error;
-      }
-      status = "fallback";
-      const ppmPath = path.join(outputDir, `${safeName}.ppm`);
-      await createPlaceholderPpm(ppmPath, index);
-      await writeJson(path.join(outputDir, `${safeName}.meta.json`), {
-        model: config.qiniu.models.roleImage,
-        status,
-        message: error.message,
-      });
-    }
+    const status = "ok";
+    const image = await client.generateImage({
+      model: config.qiniu.models.roleImage,
+      prompt,
+    });
+    await fs.writeFile(imagePath, image.buffer);
+    await writeJson(path.join(outputDir, `${safeName}.meta.json`), {
+      model: config.qiniu.models.roleImage,
+      usage: image.usage || null,
+      outputFormat: image.output_format || "png",
+      status,
+    });
 
     results.push({
       name: character.name,
       role: character.role,
       status,
-      imagePath: status === "ok" ? `${safeName}.png` : `${safeName}.ppm`,
+      imagePath: `${safeName}.png`,
       promptPath: `${safeName}.prompt.txt`,
       model: config.qiniu.models.roleImage,
     });
@@ -512,7 +353,6 @@ async function run() {
     messages: characterMessages,
     stageDir: dirs.characters,
     fileStem: "characters",
-    fallbackFactory: () => buildFallbackCharacters(adaptation),
   });
   const characters = charactersPayload.characters || [];
   manifest.stages.push({
@@ -536,7 +376,6 @@ async function run() {
     messages: storyboardMessages,
     stageDir: dirs.storyboard,
     fileStem: "storyboard",
-    fallbackFactory: () => buildFallbackStoryboard(adaptation, charactersPayload),
   });
   manifest.stages.push({
     stage: "storyboard",
@@ -568,61 +407,37 @@ async function run() {
     const imageBase = path.join(dirs.images, shotId);
     const audioPath = path.join(dirs.audio, `${shotId}.mp3`);
     const segmentPath = path.join(dirs.video, `${shotId}.mp4`);
-    let imagePath = `${imageBase}.png`;
-    let imageStatus = "ok";
-    let audioStatus = "ok";
+    const imagePath = `${imageBase}.png`;
+    const imageStatus = "ok";
+    const audioStatus = "ok";
 
     await writeText(path.join(dirs.images, `${shotId}.prompt.txt`), prompt);
 
-    try {
-      const imageResult = await client.generateImage({
-        model: config.qiniu.models.shotImage,
-        prompt,
-      });
-      await fs.writeFile(imagePath, imageResult.buffer);
-      await writeJson(path.join(dirs.images, `${shotId}.meta.json`), {
-        model: config.qiniu.models.shotImage,
-        outputFormat: imageResult.output_format || "png",
-        usage: imageResult.usage || null,
-      });
-    } catch (error) {
-      if (!config.allowFallbacks) {
-        throw error;
-      }
-      imageStatus = "fallback";
-      imagePath = `${imageBase}.ppm`;
-      await createPlaceholderPpm(imagePath, index);
-      await writeJson(path.join(dirs.images, `${shotId}.meta.json`), {
-        model: config.qiniu.models.shotImage,
-        status: "fallback",
-        message: error.message,
-      });
-    }
+    const imageResult = await client.generateImage({
+      model: config.qiniu.models.shotImage,
+      prompt,
+    });
+    await fs.writeFile(imagePath, imageResult.buffer);
+    await writeJson(path.join(dirs.images, `${shotId}.meta.json`), {
+      model: config.qiniu.models.shotImage,
+      outputFormat: imageResult.output_format || "png",
+      usage: imageResult.usage || null,
+      status: "ok",
+    });
 
     let durationSec = Number(shot.duration_sec || 5);
-    try {
-      const ttsResult = await client.synthesizeSpeech({
-        text: shot.line || shot.subtitle,
-        voiceType: resolveVoice(shot.speaker, characters),
-      });
-      await fs.writeFile(audioPath, ttsResult.buffer);
-      durationSec = Math.max(durationSec, (ttsResult.durationMs || 0) / 1000 + 0.35);
-      await writeJson(path.join(dirs.audio, `${shotId}.meta.json`), {
-        voiceType: resolveVoice(shot.speaker, characters),
-        durationMs: ttsResult.durationMs,
-        reqid: ttsResult.reqid,
-      });
-    } catch (error) {
-      if (!config.allowFallbacks) {
-        throw error;
-      }
-      audioStatus = "fallback";
-      await renderSilentAudio(audioPath, durationSec);
-      await writeJson(path.join(dirs.audio, `${shotId}.meta.json`), {
-        status: "fallback",
-        message: error.message,
-      });
-    }
+    const ttsResult = await client.synthesizeSpeech({
+      text: shot.line || shot.subtitle,
+      voiceType: resolveVoice(shot.speaker, characters),
+    });
+    await fs.writeFile(audioPath, ttsResult.buffer);
+    durationSec = Math.max(durationSec, (ttsResult.durationMs || 0) / 1000 + 0.35);
+    await writeJson(path.join(dirs.audio, `${shotId}.meta.json`), {
+      voiceType: resolveVoice(shot.speaker, characters),
+      durationMs: ttsResult.durationMs,
+      reqid: ttsResult.reqid,
+      status: "ok",
+    });
 
     await renderSegment({
       imagePath,

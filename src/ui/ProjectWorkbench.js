@@ -17,7 +17,7 @@ const subjectKinds = [
   { id: "prop", label: "道具", key: "props" },
 ];
 
-const fallbackModelOptions = {
+const defaultModelOptions = {
   adaptation: ["openai/gpt-5.4", "openai/gpt-5.4-mini", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324"],
   characters: ["openai/gpt-5.4", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
   storyboard: ["gemini-2.5-pro", "openai/gpt-5.4", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
@@ -92,23 +92,23 @@ function StatusDot({ status }) {
 
 function buildModelOptions(modelCatalog) {
   if (!modelCatalog?.length) {
-    return fallbackModelOptions;
+    return defaultModelOptions;
   }
 
-  const byCapability = (capability, fallback) => {
+  const byCapability = (capability, defaults) => {
     const items = modelCatalog
       .filter((item) => item.capabilities?.includes(capability))
       .map((item) => item.modelId);
-    return items.length ? items : fallback;
+    return items.length ? items : defaults;
   };
 
   return {
-    adaptation: byCapability("script", fallbackModelOptions.adaptation),
-    characters: byCapability("subject_analysis", fallbackModelOptions.characters),
-    storyboard: byCapability("storyboard", fallbackModelOptions.storyboard),
-    roleImage: byCapability("subject_reference", fallbackModelOptions.roleImage),
-    shotImage: byCapability("shot_image", fallbackModelOptions.shotImage),
-    shotVideo: byCapability("video_generation", fallbackModelOptions.shotVideo),
+    adaptation: byCapability("script", defaultModelOptions.adaptation),
+    characters: byCapability("subject_analysis", defaultModelOptions.characters),
+    storyboard: byCapability("storyboard", defaultModelOptions.storyboard),
+    roleImage: byCapability("subject_reference", defaultModelOptions.roleImage),
+    shotImage: byCapability("shot_image", defaultModelOptions.shotImage),
+    shotVideo: byCapability("video_generation", defaultModelOptions.shotVideo),
   };
 }
 
@@ -847,13 +847,13 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
-  function openPreview(reference, fallbackTitle) {
+  function openPreview(reference, defaultTitle) {
     if (!reference?.url) {
       return;
     }
     setPreviewAsset({
       url: reference.url,
-      title: reference.name || fallbackTitle,
+      title: reference.name || defaultTitle,
     });
   }
 

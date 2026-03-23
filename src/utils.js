@@ -141,35 +141,6 @@ export function escapeSubtitlePath(filePath) {
   return filePath.replaceAll("\\", "\\\\").replaceAll(":", "\\:");
 }
 
-export function pickColor(index) {
-  const palette = [
-    [26, 71, 112],
-    [81, 33, 99],
-    [104, 51, 37],
-    [17, 90, 72],
-    [94, 37, 53],
-  ];
-  return palette[index % palette.length];
-}
-
-export async function createPlaceholderPpm(filePath, index) {
-  const width = 160;
-  const height = 90;
-  const [r, g, b] = pickColor(index);
-  const lines = [`P3`, `${width} ${height}`, `255`];
-
-  for (let y = 0; y < height; y += 1) {
-    const row = [];
-    for (let x = 0; x < width; x += 1) {
-      const mix = Math.floor(((x + y) / (width + height)) * 36);
-      row.push(`${Math.min(255, r + mix)} ${Math.min(255, g + mix)} ${Math.min(255, b + mix)}`);
-    }
-    lines.push(row.join(" "));
-  }
-
-  await writeText(filePath, lines.join("\n"));
-}
-
 export function secondsToSrtTime(totalSeconds) {
   const ms = Math.round(totalSeconds * 1000);
   const hours = Math.floor(ms / 3600000);
