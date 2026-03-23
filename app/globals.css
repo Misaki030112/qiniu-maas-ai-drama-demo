@@ -288,10 +288,10 @@ video {
 
 .workspace-topbar {
   display: grid;
-  grid-template-columns: 320px 1fr 320px;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
-  gap: 20px;
-  padding: 18px 22px;
+  gap: 14px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--line);
   background: rgba(16, 18, 22, 0.96);
   backdrop-filter: blur(10px);
@@ -303,37 +303,45 @@ video {
 .workspace-topbar__left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  min-width: 0;
 }
 
 .workspace-title {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
 }
 
 .workspace-title h1 {
   margin: 0;
-  font-size: 28px;
+  font-size: 22px;
   letter-spacing: -0.04em;
+  line-height: 1.08;
 }
 
 .workspace-title span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .studio-tabs {
   display: flex;
   justify-content: center;
   gap: 0;
+  justify-self: center;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .studio-tab {
-  min-width: 108px;
-  padding: 12px 18px;
+  min-width: 96px;
+  padding: 10px 16px;
   border: 1px solid var(--line);
   background: transparent;
   color: var(--text);
+  font-size: 15px;
 }
 
 .studio-tab:first-child {
@@ -354,6 +362,7 @@ video {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+  justify-self: end;
 }
 
 .studio-badge {
