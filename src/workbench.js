@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { URL } from "node:url";
 import { config } from "./config.js";
-import { readJson, readText } from "./utils.js";
+import { ensureDir, makeRunId, readJson, readText, writeText } from "./utils.js";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -20,340 +21,141 @@ const mimeTypes = {
   ".ppm": "image/x-portable-pixmap",
 };
 
+const runningJobs = new Map();
+
+const modelOptions = {
+  text: [
+    "openai/gpt-5.4-mini",
+    "openai/gpt-5.4",
+    "deepseek-v3-0324",
+    "glm-4.5-air",
+    "minimax/minimax-m2.5",
+  ],
+  image: [
+    "gemini-2.5-flash-image",
+    "gpt-image-1",
+    "imagen-4",
+    "minimax-image-01",
+  ],
+  video: ["veo-3", "sora-2", "runway-gen-4", "hailuo-2.3"],
+};
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function htmlPage() {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>点众 AI 真人剧工作台</title>
+  <title>AI 真人剧执行台</title>
   <style>
     :root {
-      --bg: #111214;
-      --bg-2: #17181b;
-      --panel: #1b1c20;
-      --panel-2: #202126;
-      --panel-3: #27282f;
+      --bg: #111317;
+      --panel: #171a20;
+      --panel-2: #1d2128;
       --line: rgba(255,255,255,0.08);
-      --line-2: rgba(177, 255, 69, 0.18);
-      --text: #f5f7fa;
-      --muted: #90949f;
-      --accent: #9cff38;
-      --accent-2: #72d61b;
-      --danger: #ef7c62;
-      --shadow: 0 22px 60px rgba(0,0,0,0.38);
-      --radius: 18px;
+      --text: #eef2f8;
+      --muted: #98a0ad;
+      --accent: #9bff3d;
+      --danger: #ff8d73;
+      --shadow: 0 20px 50px rgba(0,0,0,0.28);
     }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
-      min-height: 100%;
       background:
-        radial-gradient(circle at top right, rgba(156,255,56,0.08), transparent 26%),
-        radial-gradient(circle at bottom left, rgba(72,87,255,0.06), transparent 22%),
-        var(--bg);
+        radial-gradient(circle at top right, rgba(155,255,61,0.08), transparent 22%),
+        #111317;
       color: var(--text);
-      font-family: "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+      font-family: "SF Pro Display","PingFang SC","Helvetica Neue",sans-serif;
+      min-height: 100%;
     }
-    button, input, textarea, select { font: inherit; }
-    .app-shell {
+    button, input, select, textarea { font: inherit; }
+    .layout {
       display: grid;
-      grid-template-columns: 74px 260px 1fr 380px;
+      grid-template-columns: 280px 1fr 360px;
       min-height: 100vh;
     }
-    .rail {
-      background: #15161a;
+    .left, .right {
+      background: rgba(18,20,24,0.94);
       border-right: 1px solid var(--line);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 18px 0;
-      gap: 18px;
+      padding: 20px;
     }
-    .avatar, .avatar-small {
-      border-radius: 50%;
-      display: grid;
-      place-items: center;
-      background: linear-gradient(135deg, #9cff38, #2ce0c8);
-      color: #10110f;
-      font-weight: 700;
-      box-shadow: 0 10px 30px rgba(156,255,56,0.2);
+    .right {
+      border-right: none;
+      border-left: 1px solid var(--line);
     }
-    .avatar { width: 36px; height: 36px; font-size: 14px; }
-    .avatar-small { width: 32px; height: 32px; font-size: 12px; }
-    .rail-group {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      margin-top: 8px;
-      width: 100%;
-      align-items: center;
-    }
-    .rail-btn {
-      width: 42px;
-      height: 42px;
-      border-radius: 14px;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--muted);
-      display: grid;
-      place-items: center;
-      cursor: pointer;
-      transition: all .18s ease;
-      font-size: 18px;
-    }
-    .rail-btn.active,
-    .rail-btn:hover {
-      background: rgba(156,255,56,0.08);
-      border-color: rgba(156,255,56,0.18);
-      color: var(--accent);
-    }
-    .rail-spacer { flex: 1; }
-    .project-column {
-      background: #1a1b1f;
-      border-right: 1px solid var(--line);
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-    }
-    .project-head {
-      padding: 18px 18px 14px;
-      border-bottom: 1px solid var(--line);
-    }
-    .back-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 16px;
-    }
-    .ghost-btn {
-      border: 1px solid var(--line);
-      background: transparent;
-      color: var(--text);
-      border-radius: 12px;
-      padding: 10px 12px;
-      cursor: pointer;
-    }
-    .project-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    .project-title h1 {
-      margin: 0;
-      font-size: 28px;
-      letter-spacing: -0.04em;
-    }
-    .project-title p {
-      margin: 6px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    .run-column {
-      padding: 16px 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      min-height: 0;
-      overflow: auto;
-    }
-    .toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 0 6px;
-    }
-    .toolbar strong {
-      font-size: 13px;
-      color: var(--muted);
-      font-weight: 600;
-      letter-spacing: 0.01em;
-    }
-    .green-btn {
-      background: var(--accent);
-      color: #11130c;
-      border: none;
-      border-radius: 14px;
-      padding: 10px 14px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .run-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .run-item {
-      border: 1px solid var(--line);
-      background: var(--panel);
-      border-radius: 16px;
-      padding: 14px;
-      cursor: pointer;
-      transition: all .18s ease;
-    }
-    .run-item.active,
-    .run-item:hover {
-      background: #202126;
-      border-color: var(--line-2);
-      box-shadow: 0 10px 30px rgba(0,0,0,0.22);
-    }
-    .run-item strong {
-      display: block;
-      font-size: 14px;
-      margin-bottom: 6px;
-    }
-    .run-item span {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .run-footer {
-      margin-top: auto;
-      padding: 14px 12px 18px;
-      border-top: 1px solid var(--line);
-    }
-    .studio {
+    .center {
       min-width: 0;
       display: flex;
       flex-direction: column;
     }
     .topbar {
-      height: 78px;
+      padding: 18px 22px;
       border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 14px;
-      padding: 0 22px;
-      background: rgba(18,19,22,0.7);
-      backdrop-filter: blur(10px);
+      gap: 16px;
+      background: rgba(17,19,23,0.72);
+      backdrop-filter: blur(12px);
       position: sticky;
       top: 0;
       z-index: 2;
     }
-    .stage-tabs {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      padding: 6px;
-      background: #17181c;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-    }
-    .stage-tab {
-      min-width: 92px;
-      padding: 10px 14px;
-      border-radius: 12px;
-      border: none;
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      font-weight: 600;
-    }
-    .stage-tab.active {
-      color: var(--accent);
-      background: rgba(156,255,56,0.08);
-    }
-    .top-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .metric-pill, .outline-pill {
-      border-radius: 14px;
-      padding: 12px 16px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--text);
-      font-weight: 600;
-    }
-    .outline-pill { background: transparent; color: var(--muted); }
-    .content {
-      padding: 22px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      min-height: calc(100vh - 78px);
-      overflow: auto;
-    }
-    .studio-card {
-      background: rgba(24,25,29,0.96);
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      box-shadow: var(--shadow);
-    }
-    .hero {
-      padding: 18px;
-      display: grid;
-      grid-template-columns: 1.12fr 0.88fr;
-      gap: 18px;
-    }
-    .video-stage {
-      background: #0f1013;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 14px;
-    }
-    .video-stage video {
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      border-radius: 14px;
-      background: #090a0b;
-    }
-    .section-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-    .section-title h2 {
+    .topbar h1 {
       margin: 0;
-      font-size: 20px;
-      letter-spacing: -0.03em;
+      font-size: 24px;
+      letter-spacing: -0.04em;
     }
-    .section-title p {
-      margin: 4px 0 0;
+    .topbar p {
+      margin: 6px 0 0;
       color: var(--muted);
       font-size: 13px;
     }
-    .badges {
+    .tabs {
       display: flex;
-      flex-wrap: wrap;
       gap: 8px;
+      flex-wrap: wrap;
     }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 7px 10px;
+    .tab {
+      border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(255,255,255,0.05);
-      color: var(--text);
-      font-size: 12px;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 14px;
+      cursor: pointer;
     }
-    .badge.accent { background: rgba(156,255,56,0.12); color: var(--accent); }
-    .badge.warn { background: rgba(239,124,98,0.14); color: #ffb39f; }
-    .overview-grid,
-    .panel-grid {
+    .tab.active {
+      color: #111317;
+      background: var(--accent);
+      border-color: transparent;
+      font-weight: 700;
+    }
+    .section {
+      padding: 22px;
       display: grid;
       gap: 18px;
     }
-    .overview-grid { grid-template-columns: repeat(3, 1fr); }
-    .panel-grid { grid-template-columns: repeat(2, 1fr); }
-    .pane {
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
       padding: 18px;
       min-width: 0;
     }
-    .pane h3 {
+    .card h2, .card h3, .panel-title {
       margin: 0 0 10px;
-      font-size: 16px;
+      letter-spacing: -0.03em;
     }
-    .mono, .muted, .body-copy, .script-block, .list-item p, .shot-meta, .small {
+    .small, .muted, .body, .meta, .mono {
       color: var(--muted);
       line-height: 1.6;
       font-size: 13px;
@@ -362,394 +164,330 @@ function htmlPage() {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       word-break: break-all;
     }
-    .stat-card {
-      background: var(--panel);
+    .stack { display: grid; gap: 12px; }
+    .run-list { display: grid; gap: 10px; margin-top: 14px; }
+    .run-item {
+      padding: 14px;
+      border-radius: 14px;
       border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 16px;
+      background: var(--panel);
+      cursor: pointer;
+      transition: all .16s ease;
     }
-    .stat-card strong {
-      font-size: 26px;
+    .run-item:hover, .run-item.active {
+      border-color: rgba(155,255,61,0.35);
+      background: var(--panel-2);
+    }
+    .run-item strong {
       display: block;
       margin-bottom: 6px;
-      letter-spacing: -0.04em;
+      font-size: 14px;
     }
-    .board-grid {
+    .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      font-size: 12px;
+      color: var(--text);
+    }
+    .pill.good { color: var(--accent); background: rgba(155,255,61,0.12); }
+    .pill.warn { color: #ffc3b2; background: rgba(255,141,115,0.12); }
+    .stage-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 12px;
     }
-    .asset-card {
-      background: var(--panel);
+    .stage-box {
       border: 1px solid var(--line);
-      border-radius: 18px;
-      overflow: hidden;
+      border-radius: 16px;
+      padding: 14px;
+      background: var(--panel);
     }
-    .asset-card img {
+    .stage-box strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 18px;
+    }
+    video {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #0a0c0e;
+      border-radius: 14px;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    .stage-list, .asset-grid, .shot-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .asset-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .shot-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .mini-card {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+    }
+    .mini-card img {
       width: 100%;
       aspect-ratio: 16 / 10;
       object-fit: cover;
       display: block;
-      background: #0d0e10;
-    }
-    .asset-body {
-      padding: 14px;
-    }
-    .asset-body h4 {
-      margin: 0 0 6px;
-      font-size: 15px;
-    }
-    .script-shell {
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      gap: 18px;
-    }
-    .chapter-card, .text-surface, .side-panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-    }
-    .chapter-card {
-      padding: 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .chapter-pill {
-      border-radius: 14px;
-      background: rgba(255,255,255,0.05);
-      padding: 16px;
-      font-weight: 700;
-      border: 1px solid var(--line);
-    }
-    .text-surface {
-      padding: 22px;
-      min-height: 540px;
-      white-space: pre-wrap;
-      line-height: 1.9;
-      font-size: 15px;
-    }
-    .tab-strip {
-      display: flex;
-      gap: 24px;
-      padding: 0 4px 10px;
-      border-bottom: 1px solid var(--line);
-      margin-bottom: 16px;
-    }
-    .tab-mini {
-      position: relative;
-      color: var(--muted);
-      font-weight: 700;
-      padding-bottom: 10px;
-      cursor: pointer;
-    }
-    .tab-mini.active {
-      color: var(--text);
-    }
-    .tab-mini.active::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: -1px;
-      height: 3px;
-      border-radius: 999px;
-      background: var(--accent);
-    }
-    .shot-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 16px;
-    }
-    .shot-card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      overflow: hidden;
+      border-radius: 12px;
+      background: #0a0c0e;
+      margin-bottom: 10px;
     }
     .shot-card img {
-      width: 100%;
       aspect-ratio: 16 / 9;
-      object-fit: cover;
-      display: block;
-      background: #0f1013;
     }
-    .shot-card .asset-body audio {
+    audio {
       width: 100%;
       margin-top: 10px;
     }
-    .list-surface {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .list-item {
-      background: var(--panel);
+    .text-block {
+      background: var(--panel-2);
       border: 1px solid var(--line);
       border-radius: 16px;
       padding: 16px;
+      white-space: pre-wrap;
+      line-height: 1.8;
+      min-height: 220px;
     }
-    .list-item h4 {
-      margin: 0 0 6px;
-      font-size: 15px;
-    }
-    .side-panel {
-      border-left: 1px solid var(--line);
-      background: #1c1d21;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      min-width: 0;
-    }
-    .side-title {
-      color: var(--accent);
-      font-size: 16px;
-      font-weight: 800;
-      margin: 0;
-    }
-    .control-block {
-      border-top: 1px solid var(--line);
-      padding-top: 18px;
-    }
-    .control-block h4 {
-      margin: 0 0 12px;
-      font-size: 15px;
-    }
-    .ratio-grid, .mode-grid {
+    .field {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
+      gap: 8px;
+      margin-bottom: 14px;
     }
-    .mode-grid { grid-template-columns: 1fr; }
-    .ratio-pill, .mode-pill, .light-pill {
+    .field label {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .input, .select, .textarea {
+      width: 100%;
       border: 1px solid var(--line);
+      background: #111317;
+      color: var(--text);
       border-radius: 14px;
-      padding: 12px;
-      background: var(--panel);
-      text-align: center;
-      color: var(--muted);
-    }
-    .ratio-pill.active, .mode-pill.active, .light-pill.active {
-      color: var(--accent);
-      border-color: rgba(156,255,56,0.5);
-      background: rgba(156,255,56,0.08);
+      padding: 12px 14px;
     }
     .textarea {
-      width: 100%;
-      min-height: 160px;
-      background: #15161a;
-      color: var(--text);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 14px;
+      min-height: 180px;
       resize: vertical;
       line-height: 1.7;
     }
-    .helper-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
+    .btn-row {
+      display: flex;
       gap: 10px;
+      flex-wrap: wrap;
     }
-    .helper-thumb {
-      background: var(--panel);
+    .btn {
       border: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
       border-radius: 14px;
-      padding: 10px;
+      padding: 11px 14px;
+      cursor: pointer;
     }
-    .helper-thumb img {
-      width: 100%;
-      aspect-ratio: 4 / 3;
-      object-fit: cover;
-      border-radius: 10px;
-      display: block;
+    .btn.primary {
+      background: var(--accent);
+      color: #111317;
+      border-color: transparent;
+      font-weight: 700;
     }
-    .helper-thumb span {
-      display: block;
-      margin-top: 8px;
-      font-size: 12px;
+    .note {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--line);
       color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
     }
-    .empty-state {
-      display: grid;
-      place-items: center;
-      min-height: 240px;
+    .empty {
+      border: 1px dashed var(--line);
+      border-radius: 16px;
+      padding: 24px;
       text-align: center;
       color: var(--muted);
-      border: 1px dashed var(--line);
-      border-radius: 18px;
-      background: rgba(255,255,255,0.02);
-      padding: 20px;
     }
-    .link-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
+    .link {
+      color: inherit;
     }
-    .link-chip {
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      padding: 8px 12px;
-      color: var(--muted);
-      text-decoration: none;
+    @media (max-width: 1360px) {
+      .layout { grid-template-columns: 260px 1fr 320px; }
+      .stage-grid { grid-template-columns: repeat(3, 1fr); }
+      .hero-grid, .split { grid-template-columns: 1fr; }
+      .shot-grid, .asset-grid { grid-template-columns: 1fr; }
     }
-    .link-chip:hover {
-      color: var(--text);
-      border-color: var(--line-2);
-    }
-    .hidden { display: none !important; }
-    @media (max-width: 1480px) {
-      .app-shell {
-        grid-template-columns: 74px 220px 1fr 340px;
-      }
-      .board-grid { grid-template-columns: repeat(2, 1fr); }
-      .hero { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 1180px) {
-      .app-shell {
-        grid-template-columns: 74px 1fr;
-      }
-      .project-column, .side-panel { display: none; }
-      .board-grid, .panel-grid, .overview-grid, .script-shell, .shot-grid {
-        grid-template-columns: 1fr;
-      }
-      .topbar {
-        flex-direction: column;
-        height: auto;
-        padding: 16px;
-        align-items: stretch;
-      }
-      .top-actions {
-        justify-content: flex-end;
-      }
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: 1fr; }
+      .left, .right { border: none; }
+      .stage-grid { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="rail">
-      <div class="avatar">点</div>
-      <div class="rail-group">
-        <button class="rail-btn active" title="工作台">⌂</button>
-        <button class="rail-btn" title="灵感">✦</button>
-        <button class="rail-btn" title="收藏">♡</button>
-        <button class="rail-btn" title="模型">⎇</button>
-        <button class="rail-btn" title="资产">▣</button>
-        <button class="rail-btn" title="账单">☰</button>
+  <div class="layout">
+    <aside class="left">
+      <div class="stack">
+        <div>
+          <div class="panel-title">运行记录</div>
+          <div class="muted">只保留当前最重要的信息：哪次运行完成了、是否能看结果。</div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="refreshBtn">刷新</button>
+        </div>
       </div>
-      <div class="rail-spacer"></div>
-      <div class="rail-group">
-        <button class="rail-btn active" title="当前项目">⚡</button>
-        <button class="rail-btn" title="通知">◔</button>
-        <button class="rail-btn" title="文档">⌘</button>
-      </div>
-      <div class="avatar-small">晚</div>
+      <div class="run-list" id="runList"></div>
     </aside>
 
-    <aside class="project-column">
-      <div class="project-head">
-        <div class="back-row">
-          <button class="ghost-btn" id="backBtn">返回</button>
-        </div>
-        <div class="project-title">
-          <div>
-            <h1>着急的样片</h1>
-            <p>点众科技 AI 真人剧演示链路，围绕剧情、主体、分镜和成片组织全过程。</p>
-          </div>
-        </div>
-      </div>
-      <div class="run-column">
-        <div class="toolbar">
-          <strong>运行记录</strong>
-          <button class="green-btn" id="refreshBtn">刷新</button>
-        </div>
-        <div id="runList" class="run-list"></div>
-      </div>
-      <div class="run-footer">
-        <button class="ghost-btn" style="width:100%">添加新剧集</button>
-      </div>
-    </aside>
-
-    <section class="studio">
+    <main class="center">
       <div class="topbar">
-        <div class="stage-tabs" id="stageTabs"></div>
-        <div class="top-actions">
-          <div class="metric-pill" id="favPill">0</div>
-          <button class="outline-pill">分享</button>
-          <button class="green-btn" id="actionBtn">进入工作台</button>
+        <div>
+          <h1>点众 AI 真人剧 Demo</h1>
+          <p>核心流程：剧本 -> 角色 -> 分镜 -> 画面 -> 配音 -> 成片。只展示可理解、可执行、可验收的能力。</p>
+        </div>
+        <div class="tabs" id="tabs"></div>
+      </div>
+      <div class="section" id="app"></div>
+    </main>
+
+    <aside class="right">
+      <div class="stack">
+        <div>
+          <div class="panel-title">执行配置</div>
+          <div class="muted">这里的按钮代表当前产品真的能做什么。现在只保留模型切换、执行和结果查看。</div>
+        </div>
+
+        <div class="field">
+          <label for="storyInput">故事输入</label>
+          <textarea id="storyInput" class="textarea" placeholder="输入一段剧情文本，用来生成一条真人剧 demo。"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="adaptationModel">剧本改编模型</label>
+          <select id="adaptationModel" class="select"></select>
+        </div>
+        <div class="field">
+          <label for="characterModel">角色设定模型</label>
+          <select id="characterModel" class="select"></select>
+        </div>
+        <div class="field">
+          <label for="storyboardModel">分镜模型</label>
+          <select id="storyboardModel" class="select"></select>
+        </div>
+        <div class="field">
+          <label for="roleImageModel">角色首图模型</label>
+          <select id="roleImageModel" class="select"></select>
+        </div>
+        <div class="field">
+          <label for="shotImageModel">镜头图模型</label>
+          <select id="shotImageModel" class="select"></select>
+        </div>
+        <div class="field">
+          <label for="videoModel">视频模型位</label>
+          <select id="videoModel" class="select"></select>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn primary" id="runBtn">执行一条新链路</button>
+          <button class="btn" id="fillCurrentBtn">带入当前运行配置</button>
+        </div>
+
+        <div class="note" id="runMessage">
+          当前视频阶段仍是“关键帧 + 音频 + 字幕 + 合成”。视频模型位现在是规划位，不是假装已经做完。
         </div>
       </div>
-      <div class="content" id="app">
-        <div class="studio-card pane"><div class="empty-state">加载中…</div></div>
-      </div>
-    </section>
-
-    <aside class="side-panel">
-      <h3 class="side-title" id="sideTitle">全局设置</h3>
-      <div id="sideContent"></div>
     </aside>
   </div>
 
   <script>
+    const stageTabs = [
+      { id: "overview", label: "总览" },
+      { id: "script", label: "剧本" },
+      { id: "characters", label: "角色" },
+      { id: "storyboard", label: "分镜" },
+      { id: "preview", label: "成片" },
+    ];
+
     const state = {
       runs: [],
       currentRunId: null,
       currentRun: null,
-      currentStage: "overview",
-      assetTab: "characters",
-      shotTab: "shots",
+      currentTab: "overview",
+      config: null,
     };
 
-    const runListEl = document.getElementById("runList");
     const appEl = document.getElementById("app");
-    const sideContentEl = document.getElementById("sideContent");
-    const sideTitleEl = document.getElementById("sideTitle");
-    const stageTabsEl = document.getElementById("stageTabs");
-    const actionBtnEl = document.getElementById("actionBtn");
-    const favPillEl = document.getElementById("favPill");
+    const runListEl = document.getElementById("runList");
+    const tabsEl = document.getElementById("tabs");
+    const runMessageEl = document.getElementById("runMessage");
+    const modelFields = {
+      adaptation: document.getElementById("adaptationModel"),
+      characters: document.getElementById("characterModel"),
+      storyboard: document.getElementById("storyboardModel"),
+      roleImage: document.getElementById("roleImageModel"),
+      shotImage: document.getElementById("shotImageModel"),
+      shotVideo: document.getElementById("videoModel"),
+    };
 
-    const stages = [
-      { id: "overview", label: "概览" },
-      { id: "script", label: "剧本" },
-      { id: "assets", label: "主体" },
-      { id: "storyboard", label: "分镜" },
-      { id: "final", label: "成片" },
-    ];
-
-    document.getElementById("refreshBtn").addEventListener("click", loadRuns);
-    document.getElementById("backBtn").addEventListener("click", () => {
-      state.currentStage = "overview";
-      render();
+    document.getElementById("refreshBtn").addEventListener("click", async () => {
+      await loadRuns();
+      if (state.currentRunId) {
+        await loadRun(state.currentRunId);
+      } else {
+        render();
+      }
     });
 
-    function safe(text) {
-      return String(text || "")
+    document.getElementById("runBtn").addEventListener("click", executeRun);
+    document.getElementById("fillCurrentBtn").addEventListener("click", fillCurrentRunConfig);
+
+    function safe(value) {
+      return String(value || "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
-    }
-
-    function badge(text, type = "") {
-      return '<span class="badge ' + type + '">' + safe(text) + '</span>';
     }
 
     function artifactUrl(runId, filePath) {
       return "/artifacts/" + encodeURIComponent(runId) + "/" + filePath.split("/").map(encodeURIComponent).join("/");
     }
 
-    function formatStatus(run) {
-      return run.isComplete ? "已完成" : "运行中";
+    function pill(text, type = "") {
+      return '<span class="pill ' + type + '">' + safe(text) + "</span>";
     }
 
-    function renderStageTabs() {
-      stageTabsEl.innerHTML = stages.map((stage) => {
-        const cls = stage.id === state.currentStage ? "stage-tab active" : "stage-tab";
-        return '<button class="' + cls + '" data-stage="' + stage.id + '">' + stage.label + "</button>";
+    function empty(message) {
+      return '<div class="empty">' + safe(message) + "</div>";
+    }
+
+    function renderTabs() {
+      tabsEl.innerHTML = stageTabs.map((tab) => {
+        const cls = state.currentTab === tab.id ? "tab active" : "tab";
+        return '<button class="' + cls + '" data-tab="' + tab.id + '">' + tab.label + "</button>";
       }).join("");
-      [...stageTabsEl.querySelectorAll(".stage-tab")].forEach((node) => {
+      [...tabsEl.querySelectorAll(".tab")].forEach((node) => {
         node.addEventListener("click", () => {
-          state.currentStage = node.dataset.stage;
-          render();
+          state.currentTab = node.dataset.tab;
+          renderCenter();
         });
       });
     }
@@ -760,9 +498,10 @@ function htmlPage() {
         return (
           '<div class="' + cls + '" data-run-id="' + run.runId + '">' +
             "<strong>" + safe(run.runId) + "</strong>" +
-            "<span>" + safe(formatStatus(run)) + "</span>" +
-            "<span>" + safe(run.completedAt || "等待链路完成") + "</span>" +
-            "<span>" + safe(run.renderNote || "") + "</span>" +
+            '<div class="pill-row">' +
+              pill(run.statusText, run.isComplete ? "good" : "warn") +
+            "</div>" +
+            '<div class="meta" style="margin-top:8px">' + safe(run.completedAt || run.startedAt || "等待开始") + "</div>" +
           "</div>"
         );
       }).join("");
@@ -771,406 +510,297 @@ function htmlPage() {
       });
     }
 
-    function sectionHeader(title, desc, extra = "") {
-      return (
-        '<div class="section-title">' +
-          "<div>" +
-            "<h2>" + safe(title) + "</h2>" +
-            (desc ? "<p>" + safe(desc) + "</p>" : "") +
-          "</div>" +
-          extra +
-        "</div>"
-      );
-    }
-
     function getRunData() {
       const run = state.currentRun;
+      return {
+        adaptation: run?.artifacts?.adaptation || null,
+        characters: run?.artifacts?.characters?.characters || [],
+        storyboard: run?.artifacts?.storyboard || null,
+        subtitles: run?.artifacts?.subtitles || "",
+        storyText: run?.artifacts?.storyText || "",
+        roleReferences: run?.manifest?.roleReferences || [],
+        shots: run?.manifest?.shots || [],
+        finalVideo: run?.manifest?.outputs?.finalVideo
+          ? artifactUrl(run.runId, run.manifest.outputs.finalVideo)
+          : "",
+      };
+    }
+
+    function renderOverview() {
+      const run = state.currentRun;
       if (!run) {
-        return {
-          adaptation: null,
-          characters: [],
-          storyboard: null,
-          subtitles: "",
-          finalVideo: "",
-          roleReferences: [],
-          shots: [],
-        };
+        appEl.innerHTML = empty("还没有运行记录。先在右侧选择模型并执行一条链路。");
+        return;
       }
 
-      const adaptation = run.artifacts?.adaptation || null;
-      const characters = run.artifacts?.characters?.characters || run.manifest?.roleReferences || [];
-      const storyboard = run.artifacts?.storyboard || null;
-      const subtitles = run.artifacts?.subtitles || "";
-      const roleReferences = run.manifest?.roleReferences || [];
-      const shots = run.manifest?.shots || [];
-      const finalVideo = run.manifest?.outputs?.finalVideo
-        ? artifactUrl(run.runId, run.manifest.outputs.finalVideo)
-        : "";
-      return { adaptation, characters, storyboard, subtitles, finalVideo, roleReferences, shots };
-    }
-
-    function renderOverview(run) {
-      const { adaptation, finalVideo, shots } = getRunData();
-      const stageCount = run.manifest?.stages?.length || 0;
-      const modelCount = Object.keys(run.modelMatrix?.primary || {}).length || 0;
-      const duration = (shots || []).reduce((sum, shot) => sum + Number(shot.durationSec || 0), 0);
-      const summary = adaptation?.logline || adaptation?.theme || "当前运行还没有生成完整剧情摘要。";
-      const badges = [
-        badge(run.runId, "accent"),
-        badge(run.modelMatrix?.provider || "Qiniu MaaS / SUFY"),
-        badge(run.manifest?.renderStrategy?.mode || "legacy"),
-        !run.manifest?.completedAt ? badge("链路未完成", "warn") : "",
-      ].join("");
-
-      const left = (
-        '<div class="video-stage">' +
-          sectionHeader("最终样片", "这里展示最终视频，当前仍是“关键帧 + 音频 + 字幕 + 轻运动合成”链路。") +
-          (finalVideo
-            ? '<video controls src="' + finalVideo + '"></video>'
-            : '<div class="empty-state">当前运行尚未产出最终样片。</div>') +
-        "</div>"
-      );
-
-      const right = (
-        '<div class="studio-card pane">' +
-          sectionHeader("运行概览", "用一句话说清楚这次 run 在做什么。") +
-          '<div class="badges">' + badges + "</div>" +
-          '<p class="body-copy">' + safe(summary) + "</p>" +
-          '<p class="body-copy">' + safe(run.manifest?.renderStrategy?.note || "") + "</p>" +
-          '<div class="link-row">' +
-            '<a class="link-chip" target="_blank" href="/api/runs/' + encodeURIComponent(run.runId) + '">查看 run JSON</a>' +
-            '<a class="link-chip" target="_blank" href="' + artifactUrl(run.runId, "01-input/story.txt") + '">输入故事</a>' +
-            (run.manifest?.outputs?.subtitles
-              ? '<a class="link-chip" target="_blank" href="' + artifactUrl(run.runId, run.manifest.outputs.subtitles) + '">字幕文件</a>'
-              : "") +
-          "</div>" +
-        "</div>"
-      );
-
-      const stats = (
-        '<div class="overview-grid">' +
-          '<div class="stat-card"><strong>' + stageCount + '</strong><span class="muted">已记录阶段</span></div>' +
-          '<div class="stat-card"><strong>' + shots.length + '</strong><span class="muted">镜头数量</span></div>' +
-          '<div class="stat-card"><strong>' + duration + 's</strong><span class="muted">样片时长</span></div>' +
-        "</div>"
-      );
-
-      const stageRows = (run.manifest?.stages || []).map((stage) => {
+      const { adaptation, shots, finalVideo } = getRunData();
+      const stageNames = ["adaptation", "characters", "role_reference", "storyboard", "images_audio", "final"];
+      const completedStages = new Set((run.manifest?.stages || []).map((item) => item.stage));
+      const stageBoxes = [
+        ["剧本", "adaptation", run.modelMatrix?.primary?.adaptation || run.modelMatrix?.primary?.text],
+        ["角色", "characters", run.modelMatrix?.primary?.characters || run.modelMatrix?.primary?.text],
+        ["角色首图", "role_reference", run.modelMatrix?.primary?.roleImage || run.modelMatrix?.primary?.image],
+        ["分镜", "storyboard", run.modelMatrix?.primary?.storyboard || run.modelMatrix?.primary?.text],
+        ["镜头图/配音", "storyboard", run.modelMatrix?.primary?.shotImage || run.modelMatrix?.primary?.image],
+        ["成片", "final", run.manifest?.renderStrategy?.plannedVideoModel || "合成链路"],
+      ].map(([label, key, model]) => {
+        const ok = completedStages.has(key) || (key === "final" && run.manifest?.completedAt);
         return (
-          '<div class="list-item">' +
-            '<h4>' + safe(stage.stage) + '</h4>' +
-            '<p class="mono">' + safe(stage.model) + "</p>" +
-            '<p class="mono">' + safe(stage.output) + "</p>" +
+          '<div class="stage-box">' +
+            "<strong>" + safe(label) + "</strong>" +
+            '<div class="pill-row">' + pill(ok ? "已产出" : "待完成", ok ? "good" : "warn") + "</div>" +
+            '<div class="meta" style="margin-top:8px">' + safe(model || "未记录") + "</div>" +
           "</div>"
         );
       }).join("");
 
-      const recRows = (run.modelMatrix?.recommendations || []).map((item) => {
-        return (
-          '<div class="list-item">' +
-            '<h4>' + safe(item.stage) + '</h4>' +
-            '<p>当前默认：<span class="mono">' + safe(item.current) + "</span></p>" +
-            '<p>候选方向：' + safe((item.candidates || []).join(" / ")) + "</p>" +
-            '<p>重点观察：' + safe(item.focus) + "</p>" +
-          "</div>"
-        );
-      }).join("");
+      const duration = shots.reduce((sum, shot) => sum + Number(shot.durationSec || 0), 0);
 
-      return (
-        '<div class="studio-card hero">' + left + right + "</div>" +
-        stats +
-        '<div class="panel-grid">' +
-          '<div class="studio-card pane">' +
-            sectionHeader("阶段模型", "对应你在讲解时要说明的业务节点与实际模型。") +
-            '<div class="list-surface">' + (stageRows || '<div class="empty-state">暂无阶段记录。</div>') + "</div>" +
-          "</div>" +
-          '<div class="studio-card pane">' +
-            sectionHeader("模型策略", "保留业务阶段和模型职责，不把所有能力混成一个按钮。") +
-            '<div class="list-surface">' + (recRows || '<div class="empty-state">暂无模型策略。</div>') + "</div>" +
-          "</div>" +
-        "</div>"
-      );
-    }
-
-    function renderScript(run) {
-      const { adaptation } = getRunData();
-      const storyFile = artifactUrl(run.runId, "01-input/story.txt");
-      const scriptText = run.artifacts?.storyText || "暂无输入故事。";
-      const scenes = (adaptation?.scenes || []).map((scene) => {
-        return (
-          '<div class="list-item">' +
-            '<h4>' + safe(scene.title || scene.scene_id) + '</h4>' +
-            '<p>地点：' + safe(scene.location || "未填") + "</p>" +
-            '<p>目标：' + safe(scene.objective || "未填") + "</p>" +
-            '<p>冲突：' + safe(scene.conflict || "未填") + "</p>" +
-            '<p>转折：' + safe(scene.turning_point || "未填") + "</p>" +
-          "</div>"
-        );
-      }).join("");
-
-      return (
-        '<div class="script-shell">' +
-          '<div class="chapter-card">' +
-            '<div class="chapter-pill">第 1 章</div>' +
-            '<div class="list-item">' +
-              '<h4>剧情骨架</h4>' +
-              '<p>' + safe(adaptation?.theme || "等待生成") + "</p>" +
-              '<p class="mono">' + safe(adaptation?.title || "未命名剧本") + "</p>" +
+      appEl.innerHTML =
+        '<div class="hero-grid">' +
+          '<div class="card">' +
+            "<h2>最终结果</h2>" +
+            '<div class="body">这里直接看样片。能不能播、有没有对上，是判断当前链路是否成立的最快入口。</div>' +
+            '<div style="margin-top:14px">' +
+              (finalVideo ? '<video controls src="' + finalVideo + '"></video>' : empty("当前运行还没有成片。")) +
             "</div>" +
-            '<div class="list-item">' +
-              '<h4>关键链接</h4>' +
-              '<p><a class="link-chip" target="_blank" href="' + storyFile + '">输入剧本</a></p>' +
-              '<p><a class="link-chip" target="_blank" href="' + artifactUrl(run.runId, "02-adaptation/adaptation.json") + '">改编结果</a></p>' +
-            "</div>" +
-            '<div class="list-surface">' + (scenes || '<div class="empty-state">暂无场景拆分。</div>') + "</div>" +
           "</div>" +
-          '<div class="text-surface">' + safe(scriptText) + "</div>" +
-        "</div>"
-      );
+          '<div class="card stack">' +
+            "<div>" +
+              "<h2>本次运行</h2>" +
+              '<div class="pill-row">' +
+                pill(run.runId, "good") +
+                pill(run.isComplete ? "已完成" : "运行中", run.isComplete ? "good" : "warn") +
+                pill(run.manifest?.renderStrategy?.mode || "legacy") +
+              "</div>" +
+            "</div>" +
+            '<div class="body">' + safe(adaptation?.logline || adaptation?.theme || "当前还没有可展示的剧情摘要。") + "</div>" +
+            '<div class="stack">' +
+              '<div class="meta">镜头数：' + shots.length + "</div>" +
+              '<div class="meta">样片时长：' + duration + "s</div>" +
+              '<div class="meta">说明：' + safe(run.manifest?.renderStrategy?.note || "") + "</div>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+        '<div class="card">' +
+          "<h2>核心流程</h2>" +
+          '<div class="body">只保留最小产品闭环，不再堆和当前能力无关的入口。</div>' +
+          '<div class="stage-grid" style="margin-top:14px">' + stageBoxes + "</div>" +
+        "</div>";
     }
 
-    function renderAssets(run) {
+    function renderScript() {
+      const run = state.currentRun;
+      if (!run) {
+        appEl.innerHTML = empty("没有选中运行。");
+        return;
+      }
+      const { adaptation, storyText } = getRunData();
+      const scenes = (adaptation?.scenes || []).map((scene) => (
+        '<div class="mini-card">' +
+          "<strong>" + safe(scene.title || scene.scene_id) + "</strong>" +
+          '<div class="meta">地点：' + safe(scene.location || "未填") + "</div>" +
+          '<div class="meta">目标：' + safe(scene.objective || "未填") + "</div>" +
+          '<div class="meta">冲突：' + safe(scene.conflict || "未填") + "</div>" +
+          '<div class="meta">转折：' + safe(scene.turning_point || "未填") + "</div>" +
+        "</div>"
+      )).join("");
+
+      appEl.innerHTML =
+        '<div class="split">' +
+          '<div class="card">' +
+            "<h2>输入故事</h2>" +
+            '<div class="text-block">' + safe(storyText || "暂无输入故事。") + "</div>" +
+          "</div>" +
+          '<div class="card">' +
+            "<h2>剧本改编结果</h2>" +
+            '<div class="body">' + safe(adaptation?.logline || "暂无改编结果。") + "</div>" +
+            '<div class="stage-list" style="margin-top:14px">' + (scenes || empty("暂无场景结构。")) + "</div>" +
+          "</div>" +
+        "</div>";
+    }
+
+    function renderCharacters() {
+      const run = state.currentRun;
+      if (!run) {
+        appEl.innerHTML = empty("没有选中运行。");
+        return;
+      }
       const { characters, roleReferences } = getRunData();
-      const active = state.assetTab;
-      const roleCards = (roleReferences || []).map((item) => {
-        const imagePath = artifactUrl(run.runId, "04-role-reference/" + item.imagePath);
-        const promptPath = artifactUrl(run.runId, "04-role-reference/" + item.promptPath);
-        const detail = characters.find((entry) => entry.name === item.name) || {};
+      const characterCards = characters.map((item) => {
+        const reference = roleReferences.find((entry) => entry.name === item.name);
+        const image = reference ? artifactUrl(run.runId, "04-role-reference/" + reference.imagePath) : "";
         return (
-          '<div class="asset-card">' +
-            '<img src="' + imagePath + '" alt="' + safe(item.name) + '">' +
-            '<div class="asset-body">' +
-              '<h4>' + safe(item.name) + "</h4>" +
-              '<p class="body-copy">' + safe(detail.role || item.role || "角色") + "</p>" +
-              '<p class="small">' + safe((detail.personality || []).join(" / ")) + "</p>" +
-              '<div class="badges">' + badge(item.status === "ok" ? "主体图已生成" : "主体图回退", item.status === "ok" ? "accent" : "warn") + "</div>" +
-              '<p><a class="link-chip" target="_blank" href="' + promptPath + '">提示词</a></p>' +
-            "</div>" +
+          '<div class="mini-card">' +
+            (image ? '<img src="' + image + '" alt="' + safe(item.name) + '">' : "") +
+            "<strong>" + safe(item.name) + "</strong>" +
+            '<div class="meta">角色：' + safe(item.role || "未填") + "</div>" +
+            '<div class="meta">性格：' + safe((item.personality || []).join("、") || "未填") + "</div>" +
+            '<div class="meta">音色建议：' + safe(item.voice_style || "未填") + "</div>" +
+            '<div class="body" style="margin-top:8px">' + safe(item.continuity_prompt || item.appearance || "") + "</div>" +
           "</div>"
         );
       }).join("");
 
-      const characterList = (characters || []).map((item) => {
-        return (
-          '<div class="list-item">' +
-            '<h4>' + safe(item.name) + ' <span class="small">· ' + safe(item.role || "角色") + "</span></h4>" +
-            '<p>' + safe(item.appearance || "暂无外观描述") + "</p>" +
-            '<p>性格：' + safe((item.personality || []).join("、") || "未填") + "</p>" +
-            '<p>音色建议：' + safe(item.voice_style || "未填") + "</p>" +
-          "</div>"
-        );
-      }).join("");
-
-      return (
-        '<div class="studio-card pane">' +
-          sectionHeader("主体工作区", "参考有戏 AI 的主体台，把角色、场景、道具分成单独入口。", '<button class="outline-pill">批量生成主体图</button>') +
-          '<div class="tab-strip">' +
-            '<div class="tab-mini ' + (active === "characters" ? "active" : "") + '" data-asset-tab="characters">角色 ' + characters.length + '</div>' +
-            '<div class="tab-mini ' + (active === "scenes" ? "active" : "") + '" data-asset-tab="scenes">场景 0</div>' +
-            '<div class="tab-mini ' + (active === "props" ? "active" : "") + '" data-asset-tab="props">道具 0</div>' +
-          "</div>" +
-          (
-            active === "characters"
-              ? '<div class="board-grid">' + (roleCards || '<div class="empty-state">还没有角色首图。</div>') + "</div>" +
-                '<div class="panel-grid" style="margin-top:18px">' +
-                  '<div class="studio-card pane">' + sectionHeader("角色设定", "把文本角色描述和主体图放在一起看。") + '<div class="list-surface">' + (characterList || '<div class="empty-state">暂无角色设定。</div>') + "</div></div>" +
-                  '<div class="studio-card pane">' + sectionHeader("连续性提示词", "这里适合放角色连续性提示语，给后续镜头图或视频模型复用。") +
-                    '<div class="list-surface">' + (characters.map((item) => '<div class="list-item"><h4>' + safe(item.name) + '</h4><p>' + safe(item.continuity_prompt || "暂无") + '</p></div>').join("") || '<div class="empty-state">暂无连续性提示词。</div>') + "</div></div>" +
-                "</div>"
-              : '<div class="empty-state">当前先聚焦角色主体。场景和道具入口保留，但还没接入生成链路。</div>'
-          ) +
-        "</div>"
-      );
+      appEl.innerHTML =
+        '<div class="card">' +
+          "<h2>角色与角色首图</h2>" +
+          '<div class="body">这个页面只回答两个问题：角色定义是否清楚，角色参考图是否已经出来。</div>' +
+          '<div class="asset-grid" style="margin-top:14px">' + (characterCards || empty("暂无角色结果。")) + "</div>" +
+        "</div>";
     }
 
-    function renderStoryboard(run) {
+    function renderStoryboard() {
+      const run = state.currentRun;
+      if (!run) {
+        appEl.innerHTML = empty("没有选中运行。");
+        return;
+      }
       const { storyboard, shots } = getRunData();
-      const shotCards = (shots || []).map((shot, index) => {
-        const image = artifactUrl(run.runId, shot.imagePath);
-        const audio = artifactUrl(run.runId, shot.audioPath);
-        const segment = artifactUrl(run.runId, shot.segmentPath);
+      const shotCards = shots.map((shot, index) => {
         const shotData = storyboard?.shots?.[index] || {};
         return (
-          '<div class="shot-card">' +
-            '<img src="' + image + '" alt="' + safe(shot.shotId) + '">' +
-            '<div class="asset-body">' +
-              '<h4>' + safe(shot.shotId) + ' · ' + safe(shotData.title || "镜头") + "</h4>" +
-              '<p class="shot-meta">' + safe(shot.speaker) + " · " + safe((shotData.camera || "镜头") + " · " + shot.durationSec + "s") + "</p>" +
-              '<p class="body-copy">' + safe(shotData.subtitle || shotData.line || "暂无字幕") + "</p>" +
-              '<div class="badges">' +
-                badge("画面：" + shot.imageStatus, shot.imageStatus === "ok" ? "accent" : "warn") +
-                badge("音频：" + shot.audioStatus, shot.audioStatus === "ok" ? "accent" : "warn") +
-              "</div>" +
-              '<audio controls src="' + audio + '"></audio>' +
-              '<p><a class="link-chip" target="_blank" href="' + segment + '">镜头片段</a></p>' +
+          '<div class="mini-card shot-card">' +
+            '<img src="' + artifactUrl(run.runId, shot.imagePath) + '" alt="' + safe(shot.shotId) + '">' +
+            "<strong>" + safe(shot.shotId) + "</strong>" +
+            '<div class="meta">说话人：' + safe(shot.speaker) + "</div>" +
+            '<div class="meta">时长：' + safe(shot.durationSec + "s") + "</div>" +
+            '<div class="body" style="margin-top:8px">' + safe(shotData.subtitle || shotData.line || "") + "</div>" +
+            '<audio controls src="' + artifactUrl(run.runId, shot.audioPath) + '"></audio>' +
+          "</div>"
+        );
+      }).join("");
+
+      appEl.innerHTML =
+        '<div class="split">' +
+          '<div class="card">' +
+            "<h2>镜头卡片</h2>" +
+            '<div class="shot-grid" style="margin-top:14px">' + (shotCards || empty("暂无镜头结果。")) + "</div>" +
+          "</div>" +
+          '<div class="card">' +
+            "<h2>分镜结构</h2>" +
+            '<div class="stage-list">' +
+              ((storyboard?.shots || []).map((item) => (
+                '<div class="mini-card">' +
+                  "<strong>" + safe(item.shot_id || item.title) + "</strong>" +
+                  '<div class="meta">镜头：' + safe(item.camera || "未填") + "</div>" +
+                  '<div class="meta">焦点：' + safe(item.visual_focus || "未填") + "</div>" +
+                  '<div class="body" style="margin-top:8px">' + safe(item.image_prompt || "未填") + "</div>" +
+                "</div>"
+              )).join("") || empty("暂无分镜数据。")) +
             "</div>" +
-          "</div>"
-        );
-      }).join("");
-
-      const shotList = (storyboard?.shots || []).map((item) => {
-        return (
-          '<div class="list-item">' +
-            '<h4>' + safe(item.shot_id || item.title) + "</h4>" +
-            '<p>视觉焦点：' + safe(item.visual_focus || "未填") + "</p>" +
-            '<p>画面提示词：' + safe(item.image_prompt || "未填") + "</p>" +
-          "</div>"
-        );
-      }).join("");
-
-      return (
-        '<div class="panel-grid">' +
-          '<div class="studio-card pane">' +
-            sectionHeader("镜头板", "中间按镜头卡片查看，适合后续接视频模型时沿用。") +
-            '<div class="shot-grid">' + (shotCards || '<div class="empty-state">暂无镜头卡片。</div>') + "</div>" +
           "</div>" +
-          '<div class="studio-card pane">' +
-            sectionHeader("分镜说明", "保留文字版 shot list，便于看模型输出是否稳定。") +
-            '<div class="list-surface">' + (shotList || '<div class="empty-state">暂无分镜说明。</div>') + "</div>" +
-          "</div>" +
-        "</div>"
-      );
+        "</div>";
     }
 
-    function renderFinal(run) {
-      const { finalVideo, subtitles, shots } = getRunData();
-      const subtitlePreview = subtitles || "暂无字幕文件。";
-      const segments = (shots || []).map((shot) => {
-        const segment = artifactUrl(run.runId, shot.segmentPath);
-        return (
-          '<div class="list-item">' +
-            '<h4>' + safe(shot.shotId) + "</h4>" +
-            '<p>' + safe(shot.speaker) + " · " + safe(shot.durationSec + "s") + "</p>" +
-            '<p><a class="link-chip" target="_blank" href="' + segment + '">查看镜头片段</a></p>' +
-          "</div>"
-        );
-      }).join("");
-
-      return (
-        '<div class="panel-grid">' +
-          '<div class="studio-card pane">' +
-            sectionHeader("成片输出", "这里是最终向导师展示的短样片和产出说明。") +
-            (finalVideo
-              ? '<video controls src="' + finalVideo + '" style="width:100%;aspect-ratio:16 / 9;border-radius:14px;background:#090a0b"></video>'
-              : '<div class="empty-state">当前 run 还没有最终成片。</div>') +
-            '<div class="link-row" style="margin-top:14px">' +
-              (run.manifest?.outputs?.finalVideo
-                ? '<a class="link-chip" target="_blank" href="' + artifactUrl(run.runId, run.manifest.outputs.finalVideo) + '">打开成片文件</a>'
-                : "") +
-              (run.manifest?.outputs?.subtitles
-                ? '<a class="link-chip" target="_blank" href="' + artifactUrl(run.runId, run.manifest.outputs.subtitles) + '">打开字幕文件</a>'
-                : "") +
-            "</div>" +
+    function renderPreview() {
+      const run = state.currentRun;
+      if (!run) {
+        appEl.innerHTML = empty("没有选中运行。");
+        return;
+      }
+      const { finalVideo, subtitles } = getRunData();
+      appEl.innerHTML =
+        '<div class="split">' +
+          '<div class="card">' +
+            "<h2>最终成片</h2>" +
+            (finalVideo ? '<video controls src="' + finalVideo + '"></video>' : empty("当前还没有可播放成片。")) +
           "</div>" +
-          '<div class="studio-card pane">' +
-            sectionHeader("字幕与镜头清单", "把对白、字幕与最终镜头对应起来，方便查对齐情况。") +
-            '<div class="text-surface" style="min-height:260px">' + safe(subtitlePreview) + "</div>" +
-            '<div class="list-surface" style="margin-top:16px">' + (segments || "") + "</div>" +
+          '<div class="card">' +
+            "<h2>字幕文件</h2>" +
+            '<div class="text-block">' + safe(subtitles || "暂无字幕。") + "</div>" +
           "</div>" +
-        "</div>"
-      );
+        "</div>";
     }
 
     function renderCenter() {
-      const run = state.currentRun;
-      if (!run) {
-        appEl.innerHTML = '<div class="studio-card pane"><div class="empty-state">还没有可展示的运行结果。</div></div>';
-        return;
-      }
-
-      const renderers = {
+      const map = {
         overview: renderOverview,
         script: renderScript,
-        assets: renderAssets,
+        characters: renderCharacters,
         storyboard: renderStoryboard,
-        final: renderFinal,
+        preview: renderPreview,
       };
-      const renderer = renderers[state.currentStage] || renderOverview;
-      appEl.innerHTML = renderer(run);
-
-      [...appEl.querySelectorAll("[data-asset-tab]")].forEach((node) => {
-        node.addEventListener("click", () => {
-          state.assetTab = node.dataset.assetTab;
-          render();
-        });
-      });
-    }
-
-    function renderSidePanel() {
-      const run = state.currentRun;
-      if (!run) {
-        sideTitleEl.textContent = "全局设置";
-        sideContentEl.innerHTML = '<div class="empty-state">请选择一个运行记录。</div>';
-        return;
-      }
-
-      const { adaptation, roleReferences } = getRunData();
-      const ratioButtons = ['16:9', '9:16', '4:3', '3:4'].map((item) => {
-        const active = item === "16:9" ? " active" : "";
-        return '<div class="ratio-pill' + active + '">' + item + '</div>';
-      }).join("");
-
-      const referenceThumbs = (roleReferences || []).slice(0, 4).map((item) => {
-        return (
-          '<div class="helper-thumb">' +
-            '<img src="' + artifactUrl(run.runId, "04-role-reference/" + item.imagePath) + '" alt="' + safe(item.name) + '">' +
-            '<span>' + safe(item.name) + "</span>" +
-          "</div>"
-        );
-      }).join("");
-
-      const rightPanels = {
-        overview: {
-          title: "全局设置",
-          content:
-            '<div class="control-block"><h4>视频比例</h4><div class="ratio-grid">' + ratioButtons + '</div></div>' +
-            '<div class="control-block"><h4>创作模式</h4><div class="mode-grid">' +
-              '<div class="mode-pill active">链路通路优先</div>' +
-              '<div class="mode-pill">视频模型接入中</div>' +
-            '</div></div>' +
-            '<div class="control-block"><h4>运行策略</h4><p class="body-copy">' + safe(run.manifest?.renderStrategy?.note || "") + '</p></div>',
-        },
-        script: {
-          title: "剧本设置",
-          content:
-            '<div class="control-block"><h4>剧情主题</h4><div class="light-pill active">' + safe(adaptation?.theme || "等待生成") + '</div></div>' +
-            '<div class="control-block"><h4>一句话梗概</h4><textarea class="textarea">' + safe(adaptation?.logline || "") + '</textarea></div>' +
-            '<div class="control-block"><h4>文本模型</h4><div class="light-pill active">' + safe(run.modelMatrix?.primary?.adaptation || run.modelMatrix?.primary?.text || "未记录") + '</div></div>',
-        },
-        assets: {
-          title: "生成主体图",
-          content:
-            '<div class="control-block"><h4>主体描述</h4><textarea class="textarea">' + safe((run.artifacts?.characters?.characters || []).map((item) => item.continuity_prompt).join("\\n\\n")) + '</textarea></div>' +
-            '<div class="control-block"><h4>模型选择</h4><div class="light-pill active">' + safe(run.modelMatrix?.primary?.roleImage || run.modelMatrix?.primary?.image || "未记录") + '</div></div>' +
-            '<div class="control-block"><h4>参考图片</h4><div class="helper-grid">' + (referenceThumbs || '<div class="empty-state">暂无参考图。</div>') + '</div></div>',
-        },
-        storyboard: {
-          title: "分镜参数",
-          content:
-            '<div class="control-block"><h4>当前视频模型位</h4><div class="light-pill active">' + safe(run.manifest?.renderStrategy?.plannedVideoModel || "未配置") + '</div></div>' +
-            '<div class="control-block"><h4>镜头说明</h4><textarea class="textarea">' + safe((run.artifacts?.storyboard?.shots || []).map((item) => item.image_prompt).join("\\n\\n")) + '</textarea></div>',
-        },
-        final: {
-          title: "成片说明",
-          content:
-            '<div class="control-block"><h4>当前状态</h4>' +
-              '<div class="light-pill ' + (run.manifest?.completedAt ? "active" : "") + '">' + safe(run.manifest?.completedAt ? "成片已生成" : "等待成片") + '</div></div>' +
-            '<div class="control-block"><h4>视频模型阶段</h4><p class="body-copy">当前还未真正接入连续视频生成，这里只是预留位。后续适合接入 Veo 3、Sora 2 或同类模型。</p></div>',
-        },
-      };
-
-      const panel = rightPanels[state.currentStage] || rightPanels.overview;
-      sideTitleEl.textContent = panel.title;
-      sideContentEl.innerHTML = panel.content;
+      const renderFn = map[state.currentTab] || renderOverview;
+      renderFn();
     }
 
     function render() {
-      renderStageTabs();
+      renderTabs();
       renderRunList();
       renderCenter();
-      renderSidePanel();
-      favPillEl.textContent = state.currentRun?.artifacts?.characters?.characters?.length || state.currentRun?.manifest?.roleReferences?.length || 0;
-      actionBtnEl.textContent = state.currentStage === "assets" ? "智能分镜" : "主体提取";
+    }
+
+    function setSelectOptions(selectEl, values, currentValue) {
+      selectEl.innerHTML = values.map((value) => {
+        const selected = value === currentValue ? " selected" : "";
+        return '<option value="' + safe(value) + '"' + selected + ">" + safe(value) + "</option>";
+      }).join("");
+    }
+
+    function fillFormFromConfig(configData) {
+      document.getElementById("storyInput").value = configData.storyText || "";
+      setSelectOptions(modelFields.adaptation, configData.modelOptions.text, configData.defaults.adaptation);
+      setSelectOptions(modelFields.characters, configData.modelOptions.text, configData.defaults.characters);
+      setSelectOptions(modelFields.storyboard, configData.modelOptions.text, configData.defaults.storyboard);
+      setSelectOptions(modelFields.roleImage, configData.modelOptions.image, configData.defaults.roleImage);
+      setSelectOptions(modelFields.shotImage, configData.modelOptions.image, configData.defaults.shotImage);
+      setSelectOptions(modelFields.shotVideo, configData.modelOptions.video, configData.defaults.shotVideo);
+    }
+
+    function fillCurrentRunConfig() {
+      const run = state.currentRun;
+      if (!run) {
+        return;
+      }
+      document.getElementById("storyInput").value = run.artifacts?.storyText || "";
+      const primary = run.modelMatrix?.primary || {};
+      if (primary.adaptation) modelFields.adaptation.value = primary.adaptation;
+      if (primary.characters) modelFields.characters.value = primary.characters;
+      if (primary.storyboard) modelFields.storyboard.value = primary.storyboard;
+      if (primary.roleImage) modelFields.roleImage.value = primary.roleImage;
+      if (primary.shotImage) modelFields.shotImage.value = primary.shotImage;
+      if (primary.shotVideo) modelFields.shotVideo.value = primary.shotVideo;
+    }
+
+    async function executeRun() {
+      const payload = {
+        storyText: document.getElementById("storyInput").value.trim(),
+        models: {
+          adaptation: modelFields.adaptation.value,
+          characters: modelFields.characters.value,
+          storyboard: modelFields.storyboard.value,
+          roleImage: modelFields.roleImage.value,
+          shotImage: modelFields.shotImage.value,
+          shotVideo: modelFields.shotVideo.value,
+        },
+      };
+
+      if (!payload.storyText) {
+        runMessageEl.textContent = "请先输入故事文本。";
+        return;
+      }
+
+      runMessageEl.textContent = "正在启动一条新链路…";
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        runMessageEl.textContent = data.message || "启动失败。";
+        return;
+      }
+      runMessageEl.textContent = "已启动 run " + data.runId + "。模型慢的时候我不会卡在这里等，你可以自己刷新看进度。";
+      await loadRuns();
+      await loadRun(data.runId);
+    }
+
+    async function loadConfig() {
+      const res = await fetch("/api/config");
+      state.config = await res.json();
+      fillFormFromConfig(state.config);
     }
 
     async function loadRuns() {
@@ -1178,11 +808,6 @@ function htmlPage() {
       state.runs = await res.json();
       if (!state.currentRunId && state.runs[0]) {
         state.currentRunId = state.runs[0].runId;
-      }
-      if (state.currentRunId) {
-        await loadRun(state.currentRunId);
-      } else {
-        render();
       }
     }
 
@@ -1193,7 +818,15 @@ function htmlPage() {
       render();
     }
 
-    loadRuns();
+    (async () => {
+      await loadConfig();
+      await loadRuns();
+      if (state.currentRunId) {
+        await loadRun(state.currentRunId);
+      } else {
+        render();
+      }
+    })();
   </script>
 </body>
 </html>`;
@@ -1204,25 +837,40 @@ async function listRuns() {
     const entries = await fs.readdir(config.outputRoot, { withFileTypes: true });
     const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
     const runs = [];
-    for (const runId of dirs.sort().reverse()) {
+    for (const runId of dirs) {
       const manifestPath = path.join(config.outputRoot, runId, "manifest.json");
       try {
         const manifest = await readJson(manifestPath);
         runs.push({
           runId,
+          startedAt: manifest.startedAt || null,
           completedAt: manifest.completedAt || null,
-          renderNote: manifest.renderStrategy?.note || "",
           isComplete: Boolean(manifest.completedAt && manifest.outputs?.finalVideo),
+          statusText: manifest.completedAt ? "已完成" : "运行中",
         });
       } catch {
         runs.push({
           runId,
+          startedAt: null,
           completedAt: null,
-          renderNote: "",
           isComplete: false,
+          statusText: "运行中",
         });
       }
     }
+
+    for (const job of runningJobs.values()) {
+      if (!runs.find((item) => item.runId === job.runId)) {
+        runs.push({
+          runId: job.runId,
+          startedAt: job.startedAt,
+          completedAt: null,
+          isComplete: false,
+          statusText: "运行中",
+        });
+      }
+    }
+
     return runs.sort((a, b) => {
       if (a.isComplete !== b.isComplete) {
         return a.isComplete ? -1 : 1;
@@ -1253,53 +901,31 @@ async function readOptionalText(filePath) {
 async function loadRun(runId) {
   const runDir = path.join(config.outputRoot, runId);
   const manifest = await readJson(path.join(runDir, "manifest.json"));
-  const modelMatrix = await readJson(path.join(runDir, "model-matrix.json"));
+  const modelMatrix = await readOptionalJson(path.join(runDir, "model-matrix.json"));
+  const storyText = await readOptionalText(path.join(runDir, "01-input", "story.txt"));
+  const adaptation = await readOptionalJson(path.join(runDir, "02-adaptation", "adaptation.json"));
+  const characters = await readOptionalJson(path.join(runDir, "03-characters", "characters.json"));
+
+  const storyboard = (await readOptionalJson(path.join(runDir, "05-storyboard", "storyboard.json")))
+    || (await readOptionalJson(path.join(runDir, "04-storyboard", "storyboard.json")));
+  const subtitles = (await readOptionalText(path.join(runDir, "08-subtitles", "subtitles.srt")))
+    || (await readOptionalText(path.join(runDir, "07-subtitles", "subtitles.srt")));
 
   if (!manifest.renderStrategy) {
     manifest.renderStrategy = {
       mode: "legacy",
-      note: "这是旧版运行结果，尚未记录渲染策略；该样片属于静帧合成链路。",
+      note: "这是旧版运行结果，属于静帧合成链路。",
       plannedVideoModel: modelMatrix?.primary?.shotVideo || "未配置",
     };
-  }
-  if (!modelMatrix.recommendations) {
-    modelMatrix.recommendations = config.strategy.recommendations;
-  }
-
-  const storyText = await readOptionalText(path.join(runDir, "01-input", "story.txt"));
-  const adaptation = await readOptionalJson(path.join(runDir, "02-adaptation", "adaptation.json"));
-  const characters =
-    (await readOptionalJson(path.join(runDir, "03-characters", "characters.json"))) ||
-    (await readOptionalJson(path.join(runDir, "03-characters", "characters.json")));
-
-  const storyboardCandidates = [
-    path.join(runDir, "05-storyboard", "storyboard.json"),
-    path.join(runDir, "04-storyboard", "storyboard.json"),
-  ];
-  let storyboard = null;
-  for (const candidate of storyboardCandidates) {
-    storyboard = await readOptionalJson(candidate);
-    if (storyboard) {
-      break;
-    }
-  }
-
-  let subtitles = "";
-  const subtitleCandidates = [
-    path.join(runDir, "08-subtitles", "subtitles.srt"),
-    path.join(runDir, "07-subtitles", "subtitles.srt"),
-  ];
-  for (const candidate of subtitleCandidates) {
-    subtitles = await readOptionalText(candidate);
-    if (subtitles) {
-      break;
-    }
   }
 
   return {
     runId,
     manifest,
-    modelMatrix,
+    modelMatrix: modelMatrix || {
+      primary: {},
+      recommendations: config.strategy.recommendations,
+    },
     artifacts: {
       storyText,
       adaptation,
@@ -1310,8 +936,58 @@ async function loadRun(runId) {
   };
 }
 
-function sendJson(res, payload) {
-  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+async function readRequestBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+async function startRun({ storyText, models }) {
+  const runId = makeRunId();
+  const storyDir = path.join(config.workspaceRoot, "input", "generated");
+  await ensureDir(storyDir);
+  const storyPath = path.join(storyDir, `${runId}.txt`);
+  await writeText(storyPath, `${storyText.trim()}\n`);
+
+  const child = spawn(
+    process.execPath,
+    ["src/index.js", "--story", storyPath, "--run-id", runId],
+    {
+      cwd: config.workspaceRoot,
+      env: {
+        ...process.env,
+        RUN_ID: runId,
+        QINIU_ADAPTATION_MODEL: models.adaptation,
+        QINIU_CHARACTER_MODEL: models.characters,
+        QINIU_STORYBOARD_MODEL: models.storyboard,
+        QINIU_ROLE_IMAGE_MODEL: models.roleImage,
+        QINIU_SHOT_IMAGE_MODEL: models.shotImage,
+        QINIU_VIDEO_MODEL: models.shotVideo,
+      },
+      stdio: "ignore",
+      detached: true,
+    },
+  );
+  child.unref();
+
+  runningJobs.set(runId, {
+    runId,
+    pid: child.pid,
+    startedAt: new Date().toISOString(),
+  });
+
+  const cleanup = () => runningJobs.delete(runId);
+  child.on("exit", cleanup);
+  child.on("error", cleanup);
+
+  return { runId, storyPath };
+}
+
+function sendJson(res, payload, status = 200) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
@@ -1349,17 +1025,60 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (requestUrl.pathname === "/api/runs") {
+  if (requestUrl.pathname === "/api/config" && req.method === "GET") {
+    sendJson(res, {
+      storyText: await readOptionalText(config.inputStoryPath),
+      defaults: {
+        adaptation: config.qiniu.models.adaptation,
+        characters: config.qiniu.models.characters,
+        storyboard: config.qiniu.models.storyboard,
+        roleImage: config.qiniu.models.roleImage,
+        shotImage: config.qiniu.models.shotImage,
+        shotVideo: config.qiniu.models.shotVideo,
+      },
+      modelOptions,
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/run" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const storyText = String(body.storyText || "").trim();
+      if (!storyText) {
+        sendJson(res, { message: "缺少故事文本。" }, 400);
+        return;
+      }
+      const models = body.models || {};
+      const result = await startRun({
+        storyText,
+        models: {
+          adaptation: models.adaptation || config.qiniu.models.adaptation,
+          characters: models.characters || config.qiniu.models.characters,
+          storyboard: models.storyboard || config.qiniu.models.storyboard,
+          roleImage: models.roleImage || config.qiniu.models.roleImage,
+          shotImage: models.shotImage || config.qiniu.models.shotImage,
+          shotVideo: models.shotVideo || config.qiniu.models.shotVideo,
+        },
+      });
+      sendJson(res, result, 201);
+    } catch (error) {
+      sendJson(res, { message: error.message }, 500);
+    }
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/runs" && req.method === "GET") {
     sendJson(res, await listRuns());
     return;
   }
 
-  if (requestUrl.pathname.startsWith("/api/runs/")) {
+  if (requestUrl.pathname.startsWith("/api/runs/") && req.method === "GET") {
     const runId = decodeURIComponent(requestUrl.pathname.replace("/api/runs/", ""));
     try {
       sendJson(res, await loadRun(runId));
     } catch (error) {
-      sendText(res, 404, error.message);
+      sendJson(res, { message: error.message }, 404);
     }
     return;
   }
@@ -1380,5 +1099,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(config.workbenchPort, () => {
-  console.log(`AI 真人剧工作台已启动: http://localhost:${config.workbenchPort}`);
+  console.log(`AI 真人剧执行台已启动: http://localhost:${config.workbenchPort}`);
 });

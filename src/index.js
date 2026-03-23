@@ -27,6 +27,11 @@ function parseArgs(argv) {
     if (key === "--story" && next) {
       args.story = next;
       index += 1;
+      continue;
+    }
+    if (key === "--run-id" && next) {
+      args.runId = next;
+      index += 1;
     }
   }
   return args;
@@ -440,7 +445,7 @@ async function run() {
     : config.inputStoryPath;
   const storyText = await readText(storyPath);
 
-  const runId = makeRunId();
+  const runId = args.runId || process.env.RUN_ID || makeRunId();
   const runDir = path.join(config.outputRoot, runId);
   const dirs = {
     input: path.join(runDir, "01-input"),
@@ -477,6 +482,7 @@ async function run() {
     stages: [],
     outputs: {},
   };
+  await writeJson(path.join(runDir, "manifest.json"), manifest);
 
   const adaptationMessages = buildAdaptationMessages(storyText);
   const adaptation = await saveChatStage({
@@ -491,6 +497,7 @@ async function run() {
     model: config.qiniu.models.adaptation,
     output: "02-adaptation/adaptation.json",
   });
+  await writeJson(path.join(runDir, "manifest.json"), manifest);
   await runTextComparisons({
     client,
     stageName: "adaptation",
@@ -513,6 +520,7 @@ async function run() {
     model: config.qiniu.models.characters,
     output: "03-characters/characters.json",
   });
+  await writeJson(path.join(runDir, "manifest.json"), manifest);
 
   const roleReferences = await generateRoleReferenceImages({
     client,
@@ -535,6 +543,7 @@ async function run() {
     model: config.qiniu.models.storyboard,
     output: "05-storyboard/storyboard.json",
   });
+  await writeJson(path.join(runDir, "manifest.json"), manifest);
   await runTextComparisons({
     client,
     stageName: "storyboard",
