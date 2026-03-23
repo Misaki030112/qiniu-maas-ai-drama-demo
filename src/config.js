@@ -29,6 +29,8 @@ export const config = {
   qiniu: {
     apiKey: process.env.QINIU_API_KEY || "",
     baseUrl: process.env.QINIU_BASE_URL || defaultBaseUrl,
+    marketplaceCatalogUrl:
+      process.env.QINIU_MARKETPLACE_CATALOG_URL || "https://sufy.com/zh-CN/services/ai-inference/models",
     models: {
       adaptation: process.env.QINIU_ADAPTATION_MODEL || "openai/gpt-5.4",
       characters: process.env.QINIU_CHARACTER_MODEL || "gemini-2.5-pro",

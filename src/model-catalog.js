@@ -38,6 +38,38 @@ const curatedModels = [
     metadata: { verifiedFrom: "产品策略 / 官方模型入口" },
   },
   {
+    modelId: "gemini-3.1-flash-image-preview",
+    displayName: "Gemini 3.1 Flash Image Preview",
+    provider: "Google",
+    capabilities: ["image_generation", "subject_reference", "shot_image"],
+    source: "curated",
+    metadata: { verifiedFrom: "SUFY 模型广场" },
+  },
+  {
+    modelId: "kling-image-o1",
+    displayName: "Kling-Image O1",
+    provider: "Kling",
+    capabilities: ["image_generation", "subject_reference", "shot_image"],
+    source: "curated",
+    metadata: { verifiedFrom: "SUFY 模型广场" },
+  },
+  {
+    modelId: "kling-v2-new",
+    displayName: "Kling-V2-New",
+    provider: "Kling",
+    capabilities: ["image_generation", "subject_reference", "shot_image"],
+    source: "curated",
+    metadata: { verifiedFrom: "SUFY 模型广场" },
+  },
+  {
+    modelId: "kling-v1-5",
+    displayName: "Kling-V1-5",
+    provider: "Kling",
+    capabilities: ["image_generation", "subject_reference", "shot_image"],
+    source: "curated",
+    metadata: { verifiedFrom: "SUFY 模型广场" },
+  },
+  {
     modelId: "veo-3.1-fast-generate-001",
     displayName: "Veo 3.1 Fast Generate 001",
     provider: "Google",
@@ -124,6 +156,11 @@ function prettifyModelName(modelId) {
 }
 
 function inferProvider(modelId) {
+  if (/^(gemini|imagen|veo)/i.test(modelId)) return "Google";
+  if (/^(gpt-image|sora|openai\/)/i.test(modelId)) return "OpenAI";
+  if (/^(kling)/i.test(modelId)) return "Kling";
+  if (/^(vidu)/i.test(modelId)) return "Vidu";
+  if (/^(hailuo)/i.test(modelId)) return "MiniMax";
   if (modelId.startsWith("openai/")) return "OpenAI";
   if (modelId.startsWith("deepseek/") || modelId.startsWith("deepseek")) return "DeepSeek";
   if (modelId.startsWith("minimax/") || modelId.startsWith("MiniMax")) return "MiniMax";
@@ -142,6 +179,41 @@ function inferCapabilities(modelId) {
   return ["script", "subject_analysis", "storyboard"];
 }
 
+function parseStringList(raw) {
+  if (!raw || !raw.trim()) {
+    return [];
+  }
+  return raw
+    .split(",")
+    .map((item) => item.trim().replace(/\\"/g, "\"").replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
+
+function inferMarketplaceCapabilities({ modelId, displayName, features }) {
+  const text = [modelId, displayName, ...(features || [])].join(" ").toLowerCase();
+  const capabilities = [];
+
+  if (
+    /生图|文生图|图生图|图片编辑|image|imagen|gpt image|gpt-image|nano banana|kling-image/.test(text)
+  ) {
+    capabilities.push("image_generation", "subject_reference", "shot_image");
+  }
+
+  if (/视频生成|图生视频|video|veo|sora|vidu|hailuo|kling v3|kling-v3/.test(text)) {
+    capabilities.push("video_generation");
+  }
+
+  if (/文本转语音|语音合成|tts|speech/.test(text)) {
+    capabilities.push("tts", "audio_generation");
+  }
+
+  if (/图像理解|vision/.test(text)) {
+    capabilities.push("vision");
+  }
+
+  return [...new Set(capabilities)];
+}
+
 function normalizeLiveModels(items) {
   return items.map((item) => ({
     modelId: item.id,
@@ -157,10 +229,111 @@ function normalizeLiveModels(items) {
   }));
 }
 
+async function fetchMarketplaceModels() {
+  const response = await fetch(config.qiniu.marketplaceCatalogUrl, {
+    headers: {
+      "User-Agent": "ai-drama-demo/1.0",
+    },
+  });
+  const html = await response.text();
+  if (!response.ok) {
+    throw new Error(`Fetch marketplace catalog failed with ${response.status}`);
+  }
+
+  const rows = [];
+  let cursor = 0;
+
+  while (true) {
+    const idMarker = "{\\\"id\\\":\\\"";
+    const nameMarker = "\\\",\\\"name\\\":\\\"";
+    const featuresMarker = "\\\"features\\\":[";
+    const privateMarker = "],\\\"private\\\":";
+
+    const idPos = html.indexOf(idMarker, cursor);
+    if (idPos < 0) {
+      break;
+    }
+
+    const idStart = idPos + idMarker.length;
+    const idEnd = html.indexOf("\\\"", idStart);
+    if (idEnd < 0) {
+      break;
+    }
+
+    const namePos = html.indexOf(nameMarker, idEnd);
+    if (namePos < 0) {
+      cursor = idEnd + 1;
+      continue;
+    }
+    const nameStart = namePos + nameMarker.length;
+    const nameEnd = html.indexOf("\\\"", nameStart);
+    if (nameEnd < 0) {
+      break;
+    }
+
+    const featuresPos = html.indexOf(featuresMarker, nameEnd);
+    if (featuresPos < 0) {
+      cursor = nameEnd + 1;
+      continue;
+    }
+    const featuresStart = featuresPos + featuresMarker.length;
+    const featuresEnd = html.indexOf(privateMarker, featuresStart);
+    if (featuresEnd < 0) {
+      break;
+    }
+
+    const privateStart = featuresEnd + privateMarker.length;
+    const privateEnd = html.indexOf(",", privateStart);
+    if (privateEnd < 0) {
+      break;
+    }
+
+    const modelId = html.slice(idStart, idEnd).replace(/\\"/g, "\"");
+    const displayName = html.slice(nameStart, nameEnd).replace(/\\"/g, "\"");
+    const features = parseStringList(html.slice(featuresStart, featuresEnd));
+    const capabilities = inferMarketplaceCapabilities({ modelId, displayName, features });
+    if (!capabilities.length) {
+      cursor = privateEnd + 1;
+      continue;
+    }
+
+    rows.push({
+      modelId,
+      displayName,
+      provider: inferProvider(modelId),
+      capabilities,
+      source: "marketplace",
+      metadata: {
+        features,
+        private: html.slice(privateStart, privateEnd) === "true",
+        marketplaceUrl: config.qiniu.marketplaceCatalogUrl,
+      },
+    });
+
+    cursor = privateEnd + 1;
+  }
+
+  return rows;
+}
+
 function dedupeCatalog(items) {
   const map = new Map();
   for (const item of items) {
-    map.set(item.modelId, item);
+    const previous = map.get(item.modelId);
+    if (!previous) {
+      map.set(item.modelId, item);
+      continue;
+    }
+
+    map.set(item.modelId, {
+      ...previous,
+      ...item,
+      capabilities: [...new Set([...(previous.capabilities || []), ...(item.capabilities || [])])],
+      metadata: {
+        ...(previous.metadata || {}),
+        ...(item.metadata || {}),
+      },
+    });
   }
   return [...map.values()];
 }
@@ -168,7 +341,8 @@ function dedupeCatalog(items) {
 export async function refreshModelCatalog() {
   const client = new QiniuMaaSClient(config.qiniu);
   const liveModels = normalizeLiveModels(await client.listModels());
-  const allModels = dedupeCatalog([...liveModels, ...curatedModels]);
+  const marketplaceModels = await fetchMarketplaceModels();
+  const allModels = dedupeCatalog([...liveModels, ...marketplaceModels, ...curatedModels]);
 
   for (const item of allModels) {
     await query(

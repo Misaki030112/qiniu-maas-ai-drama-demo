@@ -21,8 +21,26 @@ const defaultModelOptions = {
   adaptation: ["openai/gpt-5.4", "openai/gpt-5.4-mini", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324"],
   characters: ["openai/gpt-5.4", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
   storyboard: ["gemini-2.5-pro", "openai/gpt-5.4", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
-  roleImage: ["imagen-4", "gemini-2.5-flash-image", "gpt-image-1", "minimax-image-01"],
-  shotImage: ["imagen-4", "gemini-2.5-flash-image", "gpt-image-1", "minimax-image-01"],
+  roleImage: [
+    "gemini-3.1-flash-image-preview",
+    "gemini-2.5-flash-image",
+    "imagen-4",
+    "gpt-image-1",
+    "minimax-image-01",
+    "kling-image-o1",
+    "kling-v2-new",
+    "kling-v1-5",
+  ],
+  shotImage: [
+    "gemini-3.1-flash-image-preview",
+    "gemini-2.5-flash-image",
+    "imagen-4",
+    "gpt-image-1",
+    "minimax-image-01",
+    "kling-image-o1",
+    "kling-v2-new",
+    "kling-v1-5",
+  ],
   shotVideo: ["veo-3.1-fast-generate-001", "veo-3.1-generate-001", "sora-2", "sora-2-pro", "kling-v3", "kling-v3-omni", "viduq3-turbo", "viduq3-pro"],
 };
 
