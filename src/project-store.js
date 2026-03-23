@@ -68,6 +68,62 @@ export function createDefaultModels() {
   };
 }
 
+function uniqBy(items, getKey) {
+  const map = new Map();
+  for (const item of items) {
+    const key = getKey(item);
+    if (!key || map.has(key)) {
+      continue;
+    }
+    map.set(key, item);
+  }
+  return [...map.values()];
+}
+
+function deriveScenesFromAdaptation(adaptation) {
+  return (adaptation?.scenes || []).map((scene) => ({
+    name: scene.title || scene.scene_id || "场景",
+    source_scene_id: scene.scene_id || null,
+    location: scene.location || "",
+    description: scene.objective || scene.conflict || "",
+    continuity_prompt: [
+      scene.location || scene.title || "办公室场景",
+      scene.time_of_day || "",
+      "写实真人短剧风格，环境稳定，适合后续镜头复用。",
+    ].filter(Boolean).join(" "),
+    negative_prompt: "卡通感、古装感、人物混入、畸形透视、过曝",
+  }));
+}
+
+function derivePropsFromAdaptation(adaptation) {
+  const props = [];
+  for (const scene of adaptation?.scenes || []) {
+    for (const propName of scene.key_props || []) {
+      props.push({
+        name: propName,
+        source_scene_id: scene.scene_id || null,
+        description: `${propName}，与${scene.title || scene.location || "当前场景"}有关，写实职场道具。`,
+        continuity_prompt: `${propName}，写实真人短剧道具特写，材质清晰，适合后续镜头重复出现。`,
+        negative_prompt: "卡通感、悬浮道具、材质错误、尺寸异常",
+      });
+    }
+  }
+  return uniqBy(props, (item) => item.name);
+}
+
+export function normalizeCharacterStagePayload(payload, adaptation = null) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return {
+    characters: Array.isArray(source.characters) ? source.characters : [],
+    scenes: Array.isArray(source.scenes) && source.scenes.length
+      ? source.scenes
+      : deriveScenesFromAdaptation(adaptation),
+    props: Array.isArray(source.props) && source.props.length
+      ? source.props
+      : derivePropsFromAdaptation(adaptation),
+  };
+}
+
 function normalizeProject(project) {
   return {
     ...project,
@@ -506,7 +562,14 @@ export async function saveProjectArtifact(projectId, stage, value) {
     throw new Error(`Stage ${stage} does not support manual save.`);
   }
 
-  await writeJson(targetMap[stage], value);
+  const artifactValue = stage === "characters"
+    ? normalizeCharacterStagePayload(
+        value,
+        await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")),
+      )
+    : value;
+
+  await writeJson(targetMap[stage], artifactValue);
   project.stageState[stage] = {
     status: "done",
     updatedAt: nowIso(),
@@ -536,12 +599,18 @@ export async function readProjectDetail(projectId) {
     project.storyText || (await readOptionalText(path.join(paths.dirs.input, "story.txt")));
   const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
   const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  const normalizedCharacters = normalizeCharacterStagePayload(characters, adaptation);
   const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
   const subtitles = await readOptionalText(path.join(paths.dirs.subtitles, "subtitles.srt"));
-  const roleReferences = (manifest?.roleReferences || []).map((item) => ({
+  const subjectReferences = (manifest?.subjectReferences || manifest?.roleReferences || []).map((item) => ({
     ...item,
+    kind: item.kind || "character",
+    key: item.key || item.name,
     url: `/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}`,
   }));
+  const roleReferences = subjectReferences.filter((item) => item.kind === "character");
+  const sceneReferences = subjectReferences.filter((item) => item.kind === "scene");
+  const propReferences = subjectReferences.filter((item) => item.kind === "prop");
   const shots = (manifest?.shots || []).map((shot) => ({
     ...shot,
     imageUrl: shot.imagePath ? `/api/projects/${projectId}/artifacts/${shot.imagePath}` : "",
@@ -558,10 +627,13 @@ export async function readProjectDetail(projectId) {
     artifacts: {
       storyText,
       adaptation,
-      characters,
+      characters: normalizedCharacters,
       storyboard,
       subtitles,
+      subjectReferences,
       roleReferences,
+      sceneReferences,
+      propReferences,
       shots,
       outputVideoUrl: manifest?.outputs?.outputVideo
         ? `/api/projects/${projectId}/artifacts/${manifest.outputs.outputVideo}`

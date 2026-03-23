@@ -21,7 +21,9 @@ import {
 import {
   ensureProjectWorkspace,
   getProjectPaths,
+  normalizeCharacterStagePayload,
   readProject,
+  readProjectDetail,
   writeProject,
 } from "./project-store.js";
 
@@ -123,6 +125,113 @@ function buildFallbackCharacters(adaptation) {
         voice_style: "沉稳、理性、略带疲惫",
       },
     ],
+    scenes: (adaptation.scenes || []).slice(0, 3).map((scene) => ({
+      name: scene.title || scene.scene_id || "办公室场景",
+      location: scene.location || "办公室",
+      description: `${scene.location || "办公室"}内的紧张协作环境，夜间职场灯光，对应剧情推进节点。`,
+      continuity_prompt: `${scene.location || "办公室"}，夜间职场环境，写实真人短剧风格，电脑屏幕冷光，环境稳定可复用。`,
+      negative_prompt: "卡通感、悬浮家具、古装环境、人物误入",
+    })),
+    props: [
+      {
+        name: "试播数据报表",
+        description: "显示数据断崖下跌的屏幕或报表，是危机的核心证据。",
+        continuity_prompt: "电脑屏幕上的试播数据报表，折线图明显下跌，写实职场风格，道具特写。",
+        negative_prompt: "卡通图表、乱码、UI 过度科幻",
+      },
+      {
+        name: "手机通知",
+        description: "林晚收到的项目告急通知，反复出现以强化压力。",
+        continuity_prompt: "手机通知界面，道具特写，写实手机屏幕，职场告警信息。",
+        negative_prompt: "悬浮手机、屏幕扭曲、UI 乱码",
+      },
+    ],
+  };
+}
+
+function buildSubjectPrompt(subject, kind) {
+  if (kind === "character") {
+    return [
+      "角色设定卡，写实真人短剧风格，半身或全身角色参考图。",
+      subject.continuity_prompt,
+      `角色定位：${subject.role || "未设定"}。`,
+      subject.age_range ? `年龄段：${subject.age_range}。` : "",
+      subject.wardrobe ? `服装：${subject.wardrobe}。` : "",
+      subject.appearance ? `外形：${subject.appearance}。` : "",
+      subject.voice_style ? `声音气质：${subject.voice_style}。` : "",
+      subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
+      "纯净背景，清晰服装细节，适合后续镜头复用，16:9。",
+    ].filter(Boolean).join(" ");
+  }
+
+  if (kind === "scene") {
+    return [
+      "场景设定图，写实真人短剧美术设定。",
+      subject.continuity_prompt,
+      subject.location ? `地点：${subject.location}。` : "",
+      subject.description ? `场景描述：${subject.description}。` : "",
+      subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
+      "无主要人物入镜，环境明确，灯光真实，便于后续镜头复用，16:9。",
+    ].filter(Boolean).join(" ");
+  }
+
+  return [
+    "道具设定图，写实真人短剧道具特写。",
+    subject.continuity_prompt,
+    subject.description ? `道具描述：${subject.description}。` : "",
+    subject.negative_prompt ? `避免：${subject.negative_prompt}。` : "",
+    "单一主体，道具材质清晰，商业产品图质感，16:9。",
+  ].filter(Boolean).join(" ");
+}
+
+function subjectStem(subject, fallback) {
+  return String(subject.name || fallback).replaceAll(/\s+/g, "_");
+}
+
+async function renderSubjectReference({ client, model, subject, kind, paths, index }) {
+  const safeName = subjectStem(subject, `${kind}_${index + 1}`);
+  const prompt = buildSubjectPrompt(subject, kind);
+  await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
+
+  let status = "ok";
+  let imagePath = `${safeName}.png`;
+  try {
+    const image = await client.generateImage({
+      model,
+      prompt,
+    });
+    await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
+    await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
+      model,
+      usage: image.usage || null,
+      kind,
+      name: subject.name,
+    });
+  } catch (error) {
+    if (!config.allowFallbacks) {
+      throw error;
+    }
+    status = "fallback";
+    imagePath = `${safeName}.ppm`;
+    await createPlaceholderPpm(path.join(paths.dirs.roleReference, imagePath), index);
+    await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
+      model,
+      status,
+      kind,
+      name: subject.name,
+      message: error.message,
+    });
+  }
+
+  return {
+    key: subject.name,
+    name: subject.name,
+    role: subject.role || kind,
+    kind,
+    status,
+    imagePath,
+    promptPath: `${safeName}.prompt.txt`,
+    model,
   };
 }
 
@@ -468,65 +577,37 @@ async function executeCharacters(project, client, paths, manifest, onProgress) {
     fileStem: "characters",
     fallbackFactory: () => buildFallbackCharacters(adaptation),
   });
-  const characters = payload.characters || [];
-  const roleReferences = [];
-  for (let index = 0; index < characters.length; index += 1) {
-    const character = characters[index];
-    await reportProgress(onProgress, `正在生成主体图：${character.name}`, {
+  const subjectPayload = normalizeCharacterStagePayload(payload, adaptation);
+  await writeJson(path.join(paths.dirs.characters, "characters.json"), subjectPayload);
+
+  const subjectReferences = [];
+  const subjectEntries = [
+    ...subjectPayload.characters.map((item) => ({ kind: "character", subject: item })),
+    ...subjectPayload.scenes.map((item) => ({ kind: "scene", subject: item })),
+    ...subjectPayload.props.map((item) => ({ kind: "prop", subject: item })),
+  ];
+
+  for (let index = 0; index < subjectEntries.length; index += 1) {
+    const { kind, subject } = subjectEntries[index];
+    await reportProgress(onProgress, `正在生成${kind === "character" ? "角色" : kind === "scene" ? "场景" : "道具"}：${subject.name}`, {
       current: index + 1,
-      total: characters.length,
+      total: subjectEntries.length,
     });
-    const safeName = character.name.replaceAll(/\s+/g, "_");
-    const prompt = [
-      "角色设定卡，写实真人短剧风格，半身或全身角色参考图。",
-      character.continuity_prompt,
-      `角色定位：${character.role}。`,
-      `年龄段：${character.age_range}。`,
-      `性格：${(character.personality || []).join("、")}。`,
-      "纯净背景，清晰服装细节，适合后续镜头复用，16:9。",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
-    let status = "ok";
-    let imagePath = `${safeName}.png`;
-    try {
-      const image = await client.generateImage({
-        model: project.models.roleImage,
-        prompt,
-      });
-      await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
-      await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
-        model: project.models.roleImage,
-        usage: image.usage || null,
-      });
-    } catch (error) {
-      if (!config.allowFallbacks) {
-        throw error;
-      }
-      status = "fallback";
-      imagePath = `${safeName}.ppm`;
-      await createPlaceholderPpm(path.join(paths.dirs.roleReference, imagePath), index);
-      await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
-        model: project.models.roleImage,
-        status,
-        message: error.message,
-      });
-    }
-    roleReferences.push({
-      name: character.name,
-      role: character.role,
-      status,
-      imagePath,
-      promptPath: `${safeName}.prompt.txt`,
+    subjectReferences.push(await renderSubjectReference({
+      client,
       model: project.models.roleImage,
-    });
+      subject,
+      kind,
+      paths,
+      index,
+    }));
   }
-  manifest.roleReferences = roleReferences;
+  manifest.subjectReferences = subjectReferences;
+  manifest.roleReferences = subjectReferences.filter((item) => item.kind === "character");
   manifest.outputs.characters = "03-characters/characters.json";
   manifest.outputs.roleReference = "04-role-reference";
   upsertStageRecord(manifest, "characters", project.models.characters, "03-characters/characters.json");
-  return payload;
+  return subjectPayload;
 }
 
 async function executeStoryboard(project, client, paths, manifest, onProgress) {
@@ -825,6 +906,59 @@ async function executeVideo(project, client, paths, manifest, onProgress) {
     },
   };
   upsertStageRecord(manifest, "video", project.models.shotVideo, "10-video-model/output.mp4");
+}
+
+export async function regenerateSubjectReference(projectId, { kind, key }) {
+  const project = await readProject(projectId);
+  const paths = await ensureProjectWorkspace(projectId);
+  const client = new QiniuMaaSClient(config.qiniu);
+  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  const payload = normalizeCharacterStagePayload(
+    await readOptionalJson(path.join(paths.dirs.characters, "characters.json")),
+    adaptation,
+  );
+
+  const list = {
+    character: payload.characters,
+    scene: payload.scenes,
+    prop: payload.props,
+  }[kind];
+
+  if (!list) {
+    throw new Error("未知主体类型。");
+  }
+
+  const index = list.findIndex((item) => item.name === key);
+  if (index === -1) {
+    throw new Error("未找到要重生成的主体。");
+  }
+
+  const manifest = await loadManifest(projectId, project);
+  const nextReference = await renderSubjectReference({
+    client,
+    model: project.models.roleImage,
+    subject: list[index],
+    kind,
+    paths,
+    index,
+  });
+
+  const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
+  manifest.subjectReferences = [
+    ...existingReferences.filter((item) => !(item.kind === kind && (item.key || item.name) === key)),
+    nextReference,
+  ];
+  manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
+  await saveManifest(projectId, manifest);
+  await saveModelMatrix(project, manifest);
+
+  project.stageState.characters = {
+    status: "done",
+    updatedAt: new Date().toISOString(),
+    error: null,
+  };
+  await writeProject(project);
+  return readProjectDetail(projectId);
 }
 
 export function assertExecutable(project, stage) {

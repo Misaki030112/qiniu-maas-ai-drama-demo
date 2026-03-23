@@ -82,6 +82,23 @@ export function buildCharacterMessages(adaptation) {
       "negative_prompt": "必须避免的偏差，例如卡通脸、古装、年龄漂移、服装漂移",
       "voice_style": "更适合什么声音气质"
     }
+  ],
+  "scenes": [
+    {
+      "name": "场景名",
+      "location": "场景地点",
+      "description": "这个场景需要被画成什么样",
+      "continuity_prompt": "场景一致性提示词",
+      "negative_prompt": "这个场景应避免的问题"
+    }
+  ],
+  "props": [
+    {
+      "name": "道具名",
+      "description": "这个道具的材质、形态和作用",
+      "continuity_prompt": "道具一致性提示词",
+      "negative_prompt": "这个道具应避免的问题"
+    }
   ]
 }
 
