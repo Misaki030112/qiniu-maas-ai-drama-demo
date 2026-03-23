@@ -22,11 +22,15 @@ import {
   ensureProjectWorkspace,
   getProjectPaths,
   readProject,
-  readProjectDetail,
   writeProject,
 } from "./project-store.js";
 
-const runningStages = new Map();
+async function reportProgress(onProgress, progressText, payload = null) {
+  if (!onProgress) {
+    return;
+  }
+  await onProgress({ progressText, payload });
+}
 
 function findCharacter(characters, speaker) {
   return characters.find((item) => item.name === speaker);
@@ -375,7 +379,7 @@ async function loadManifest(projectId, project) {
     baseUrl: config.qiniu.baseUrl,
     renderStrategy: {
       mode: config.video.renderMode,
-      note: "当前输出仍是静态镜头 + 配音 + 字幕合成，视频模型阶段尚未接通。",
+      note: "支持静态关键帧合成和视频模型生成两条路径。",
       plannedVideoModel: project.models.shotVideo,
     },
     stages: [],
@@ -422,7 +426,8 @@ async function saveModelMatrix(project, manifest) {
   });
 }
 
-async function executeAdaptation(project, client, paths, manifest) {
+async function executeAdaptation(project, client, paths, manifest, onProgress) {
+  await reportProgress(onProgress, "正在整理故事并生成剧本骨架");
   const storyText = project.storyText.trim() || (await readText(path.join(paths.dirs.input, "story.txt")));
   if (!storyText.trim()) {
     throw new Error("请先输入故事文本。");
@@ -448,7 +453,8 @@ async function executeAdaptation(project, client, paths, manifest) {
   return adaptation;
 }
 
-async function executeCharacters(project, client, paths, manifest) {
+async function executeCharacters(project, client, paths, manifest, onProgress) {
+  await reportProgress(onProgress, "正在生成角色设定");
   const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
   if (!adaptation) {
     throw new Error("请先完成剧本改编阶段。");
@@ -466,6 +472,10 @@ async function executeCharacters(project, client, paths, manifest) {
   const roleReferences = [];
   for (let index = 0; index < characters.length; index += 1) {
     const character = characters[index];
+    await reportProgress(onProgress, `正在生成主体图：${character.name}`, {
+      current: index + 1,
+      total: characters.length,
+    });
     const safeName = character.name.replaceAll(/\s+/g, "_");
     const prompt = [
       "角色设定卡，写实真人短剧风格，半身或全身角色参考图。",
@@ -519,7 +529,8 @@ async function executeCharacters(project, client, paths, manifest) {
   return payload;
 }
 
-async function executeStoryboard(project, client, paths, manifest) {
+async function executeStoryboard(project, client, paths, manifest, onProgress) {
+  await reportProgress(onProgress, "正在拆解分镜");
   const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
   const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
   if (!adaptation || !characters) {
@@ -546,7 +557,8 @@ async function executeStoryboard(project, client, paths, manifest) {
   return storyboard;
 }
 
-async function executeMedia(project, client, paths, manifest) {
+async function executeMedia(project, client, paths, manifest, onProgress) {
+  await reportProgress(onProgress, "正在生成镜头图与配音");
   const charactersPayload = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
   const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
   if (!charactersPayload || !storyboard) {
@@ -565,6 +577,11 @@ async function executeMedia(project, client, paths, manifest) {
 
   for (let index = 0; index < shots.length; index += 1) {
     const shot = shots[index];
+    await reportProgress(onProgress, `正在生成镜头 ${index + 1}/${shots.length}`, {
+      current: index + 1,
+      total: shots.length,
+      shotId: shot.shot_id || `shot_${String(index + 1).padStart(2, "0")}`,
+    });
     const shotId = shot.shot_id || `shot_${String(index + 1).padStart(2, "0")}`;
     const prompt = buildFinalImagePrompt(shot, characters, storyboard.style_guide);
     const imageBase = path.join(paths.dirs.images, shotId);
@@ -690,7 +707,8 @@ async function executeMedia(project, client, paths, manifest) {
   upsertStageRecord(manifest, "media", project.models.shotImage, "06-images + 07-audio + 08-subtitles");
 }
 
-async function executeOutput(project, paths, manifest) {
+async function executeOutput(project, paths, manifest, onProgress) {
+  await reportProgress(onProgress, "正在合成静态成片");
   const subtitlesPath = path.join(paths.dirs.subtitles, "subtitles.srt");
   const concatListPath = path.join(paths.dirs.video, "segments.txt");
   const roughVideoPath = path.join(paths.dirs.video, "rough-output.mp4");
@@ -736,7 +754,7 @@ async function pollVideoResult(client, model, provider, id) {
   throw new Error("视频任务轮询超时。");
 }
 
-async function executeVideo(project, client, paths, manifest) {
+async function executeVideo(project, client, paths, manifest, onProgress) {
   const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
   if (!storyboard?.shots?.length) {
     throw new Error("请先完成分镜阶段。");
@@ -757,6 +775,11 @@ async function executeVideo(project, client, paths, manifest) {
       ? await fs.readFile(imagePath)
       : null;
     const prompt = storyboardShot.video_prompt || shotOutput.videoPrompt || storyboardShot.image_prompt || storyboardShot.title || "写实真人短剧镜头";
+    await reportProgress(onProgress, `正在生成视频镜头 ${index + 1}/${shotOutputs.length}`, {
+      current: index + 1,
+      total: shotOutputs.length,
+      shotId: shotOutput.shotId,
+    });
     const task = await client.createVideoTask({
       model: project.models.shotVideo,
       prompt,
@@ -804,7 +827,7 @@ async function executeVideo(project, client, paths, manifest) {
   upsertStageRecord(manifest, "video", project.models.shotVideo, "10-video-model/output.mp4");
 }
 
-function assertExecutable(project, stage) {
+export function assertExecutable(project, stage) {
   const dependencies = {
     adaptation: [],
     characters: ["adaptation"],
@@ -820,11 +843,8 @@ function assertExecutable(project, stage) {
   }
 }
 
-export async function executeProjectStage(projectId, stage) {
-  if (runningStages.has(projectId)) {
-    throw new Error("当前项目已有阶段在运行中，请稍后再试。");
-  }
-
+export async function runProjectStage(projectId, stage, options = {}) {
+  const { onProgress } = options;
   const project = await readProject(projectId);
   assertExecutable(project, stage);
   project.stageState[stage] = {
@@ -833,7 +853,6 @@ export async function executeProjectStage(projectId, stage) {
     error: null,
   };
   await writeProject(project);
-  runningStages.set(projectId, stage);
 
   try {
     const paths = await ensureProjectWorkspace(projectId);
@@ -841,17 +860,17 @@ export async function executeProjectStage(projectId, stage) {
     const manifest = await loadManifest(projectId, project);
 
     if (stage === "adaptation") {
-      await executeAdaptation(project, client, paths, manifest);
+      await executeAdaptation(project, client, paths, manifest, onProgress);
     } else if (stage === "characters") {
-      await executeCharacters(project, client, paths, manifest);
+      await executeCharacters(project, client, paths, manifest, onProgress);
     } else if (stage === "storyboard") {
-      await executeStoryboard(project, client, paths, manifest);
+      await executeStoryboard(project, client, paths, manifest, onProgress);
     } else if (stage === "media") {
-      await executeMedia(project, client, paths, manifest);
+      await executeMedia(project, client, paths, manifest, onProgress);
     } else if (stage === "output") {
-      await executeOutput(project, paths, manifest);
+      await executeOutput(project, paths, manifest, onProgress);
     } else if (stage === "video") {
-      await executeVideo(project, client, paths, manifest);
+      await executeVideo(project, client, paths, manifest, onProgress);
     } else {
       throw new Error(`Unknown stage: ${stage}`);
     }
@@ -864,7 +883,7 @@ export async function executeProjectStage(projectId, stage) {
     await saveManifest(projectId, manifest);
     await saveModelMatrix(project, manifest);
     await writeProject(project);
-    return await readProjectDetail(projectId);
+    return project;
   } catch (error) {
     project.stageState[stage] = {
       status: "error",
@@ -873,11 +892,5 @@ export async function executeProjectStage(projectId, stage) {
     };
     await writeProject(project);
     throw error;
-  } finally {
-    runningStages.delete(projectId);
   }
-}
-
-export function isProjectStageRunning(projectId) {
-  return runningStages.has(projectId);
 }
