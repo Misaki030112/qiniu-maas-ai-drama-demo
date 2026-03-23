@@ -8,6 +8,7 @@ export class QiniuMaaSClient {
     this.openai = new OpenAI({
       apiKey: this.apiKey,
       baseURL: this.baseUrl,
+      timeout: 60000,
     });
   }
 
@@ -29,10 +30,17 @@ export class QiniuMaaSClient {
     });
 
     const rawText = normalizeChatText(response.choices[0]?.message?.content);
+    let parsed;
+    try {
+      parsed = extractJson(rawText);
+    } catch (error) {
+      error.message = `${error.message}\n--- RAW MODEL OUTPUT ---\n${rawText}`;
+      throw error;
+    }
     return {
       model,
       rawText,
-      parsed: extractJson(rawText),
+      parsed,
       usage: response.usage || null,
       responseId: response.id || null,
     };
@@ -105,4 +113,3 @@ export class QiniuMaaSClient {
     };
   }
 }
-

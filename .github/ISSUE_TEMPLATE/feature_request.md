@@ -1,7 +1,7 @@
 ---
-name: Feature request
+name: 能力增强
 about: 记录下一阶段能力建设，如模型对比、角色一致性、视频化增强
-title: "[Feature] "
+title: "[能力增强] "
 labels: enhancement
 assignees: ""
 ---
@@ -27,4 +27,3 @@ assignees: ""
 ## 验收标准
 
 如何判断这项能力完成？
-
