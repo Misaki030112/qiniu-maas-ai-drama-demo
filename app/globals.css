@@ -432,7 +432,7 @@ video {
 
 .studio-stage-strip {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -527,6 +527,12 @@ video {
 .studio-detail-editor {
   display: grid;
   gap: 10px;
+}
+
+.studio-subject-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .studio-card-grid,
@@ -726,6 +732,60 @@ audio {
   font-size: 12px;
 }
 
+.studio-option-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.studio-option-grid--wide {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.studio-option-card,
+.studio-style-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #12151a;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.studio-option-card {
+  padding: 12px 10px;
+  text-align: center;
+}
+
+.studio-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.studio-style-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  text-align: left;
+}
+
+.studio-style-card strong {
+  display: block;
+}
+
+.studio-style-card span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.studio-option-card.active,
+.studio-style-card.active {
+  border-color: rgba(147, 239, 59, 0.42);
+  background: rgba(147, 239, 59, 0.12);
+  color: var(--accent);
+}
+
 .studio-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -841,6 +901,13 @@ audio {
   .studio-subject-grid,
   .studio-output-grid,
   .studio-stage-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .studio-subject-steps,
+  .studio-option-grid,
+  .studio-option-grid--wide,
+  .studio-style-grid {
     grid-template-columns: 1fr;
   }
 

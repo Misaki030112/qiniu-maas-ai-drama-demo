@@ -7,7 +7,7 @@ const tabs = [
   { id: "script", label: "剧本", stage: "adaptation" },
   { id: "characters", label: "主体", stage: "characters" },
   { id: "storyboard", label: "分镜", stage: "storyboard" },
-  { id: "media", label: "画面", stage: "media" },
+  { id: "media", label: "故事板", stage: "media" },
   { id: "output", label: "成片", stage: "output" },
 ];
 
@@ -25,6 +25,10 @@ const modelOptions = {
   shotImage: ["imagen-4", "gemini-2.5-flash-image", "gpt-image-1", "minimax-image-01"],
   shotVideo: ["veo-3.1-fast-generate-001", "veo-3.1-generate-001", "sora-2", "sora-2-pro", "kling-v3", "kling-v3-omni"],
 };
+
+const ratioOptions = ["16:9", "9:16", "4:3", "3:4"];
+const styleOptions = ["写实", "写实电影", "都市职场", "冷灰质感", "高压夜战"];
+const createModeOptions = ["生图转视频", "图像驱动视频", "视频优先"];
 
 const stageDeps = {
   adaptation: [],
@@ -59,7 +63,7 @@ function nextTabFromProject(project) {
   if (!project) {
     return "script";
   }
-  if (project.stageState.characters.status !== "done") {
+  if (project.stageState.adaptation.status !== "done") {
     return "script";
   }
   if (project.stageState.storyboard.status !== "done") {
@@ -95,14 +99,6 @@ function StageStrip({ project }) {
           <StatusDot status={project?.stageState?.[item.stage]?.status} />
         </div>
       ))}
-      <div className="studio-stage-chip">
-        <span className="studio-stage-chip__index">6</span>
-        <div>
-          <strong>视频</strong>
-          <span>{stageStatusText(project?.stageState?.video?.status)}</span>
-        </div>
-        <StatusDot status={project?.stageState?.video?.status} />
-      </div>
     </div>
   );
 }
@@ -116,19 +112,41 @@ function EmptyCard({ title, detail }) {
   );
 }
 
+function deriveChapterList(project) {
+  const chapters = project?.artifacts?.adaptation?.chapters || [];
+  if (chapters.length) {
+    return chapters.map((chapter, index) => ({
+      key: chapter.chapter_id || `chapter_${index + 1}`,
+      title: chapter.title || `第${index + 1}章`,
+      detail: chapter.summary || "已整理",
+    }));
+  }
+  const text = project?.storyText || project?.artifacts?.storyText || "";
+  if (!text.trim()) {
+    return [];
+  }
+  return [
+    {
+      key: "chapter_1",
+      title: "第1章",
+      detail: "当前剧本",
+    },
+  ];
+}
+
 function SideList({ tab, project }) {
   if (tab === "script") {
-    const scenes = project?.artifacts?.adaptation?.scenes || [];
+    const chapters = deriveChapterList(project);
     return (
       <div className="studio-side-list">
-        {scenes.length
-          ? scenes.map((scene, index) => (
-              <button key={scene.scene_id || index} type="button" className="studio-side-item">
-                <strong>{scene.title || `场景 ${index + 1}`}</strong>
-                <span>{scene.location || scene.objective || "未填"}</span>
+        {chapters.length
+          ? chapters.map((chapter) => (
+              <button key={chapter.key} type="button" className="studio-side-item">
+                <strong>{chapter.title}</strong>
+                <span>{chapter.detail}</span>
               </button>
             ))
-          : <EmptyCard title="暂无场景" detail="先生成剧本结构" />}
+          : <EmptyCard title="暂无章节" detail="先输入剧本文本" />}
       </div>
     );
   }
@@ -164,8 +182,7 @@ function SideList({ tab, project }) {
   );
 }
 
-function SceneCards({ adaptation }) {
-  const scenes = adaptation?.scenes || [];
+function ScriptSummary({ adaptation }) {
   return (
     <div className="studio-structured">
       {adaptation?.logline ? (
@@ -174,29 +191,14 @@ function SceneCards({ adaptation }) {
           <p>{adaptation.logline}</p>
         </section>
       ) : null}
-      {scenes.length ? (
-        <section className="studio-card-grid">
-          {scenes.map((scene, index) => (
-            <article key={scene.scene_id || index} className="studio-card">
-              <div className="studio-card__top">
-                <strong>{scene.title || `场景 ${index + 1}`}</strong>
-                <span>{scene.location || "未设定场景"}</span>
-              </div>
-              <p>{scene.objective || scene.summary || "暂无目标描述"}</p>
-              <dl className="studio-meta-list">
-                <div>
-                  <dt>冲突</dt>
-                  <dd>{scene.conflict || "未填"}</dd>
-                </div>
-                <div>
-                  <dt>转折</dt>
-                  <dd>{scene.turning_point || "未填"}</dd>
-                </div>
-              </dl>
-            </article>
-          ))}
+      {adaptation?.style_notes?.length ? (
+        <section className="studio-summary-card">
+          <span className="studio-section-label">整体基调</span>
+          <div className="studio-tag-list">
+            {adaptation.style_notes.map((item) => <span key={item} className="studio-tag">{item}</span>)}
+          </div>
         </section>
-      ) : <EmptyCard title="当前还没有剧本骨架结果" detail="先执行剧本生成。" />}
+      ) : null}
     </div>
   );
 }
@@ -296,6 +298,9 @@ function SubjectTypeTabs({ payload, kind, onChange }) {
 function subjectDescription(item, kind) {
   if (!item) {
     return "";
+  }
+  if (item.full_description) {
+    return item.full_description;
   }
   if (kind === "character") {
     return item.continuity_prompt || item.appearance || "";
@@ -490,6 +495,8 @@ function buildNewSubject(kind, index) {
     return {
       name: `新角色${index + 1}`,
       role: "角色定位",
+      full_description: "",
+      reference_prompt: "",
       continuity_prompt: "",
       appearance: "",
       voice_style: "",
@@ -500,12 +507,16 @@ function buildNewSubject(kind, index) {
       name: `新场景${index + 1}`,
       location: "",
       description: "",
+      full_description: "",
+      reference_prompt: "",
       continuity_prompt: "",
     };
   }
   return {
     name: `新道具${index + 1}`,
     description: "",
+    full_description: "",
+    reference_prompt: "",
     continuity_prompt: "",
   };
 }
@@ -516,6 +527,7 @@ export function ProjectWorkbench({ projectId }) {
   const [storyText, setStoryText] = useState("");
   const [models, setModels] = useState({});
   const [message, setMessage] = useState("");
+  const [localBusyText, setLocalBusyText] = useState("");
   const [subjectKind, setSubjectKind] = useState("character");
   const [selectedSubjectKey, setSelectedSubjectKey] = useState("");
   const [modalStage, setModalStage] = useState(null);
@@ -624,6 +636,7 @@ export function ProjectWorkbench({ projectId }) {
   function runStage(stage) {
     startTransition(async () => {
       try {
+        setLocalBusyText(stage === "adaptation" ? "正在整理剧本并分析主体" : "正在提交任务");
         await persistBase();
         const res = await fetch(`/api/projects/${projectId}/execute`, {
           method: "POST",
@@ -638,6 +651,8 @@ export function ProjectWorkbench({ projectId }) {
         setMessage("任务已提交");
       } catch (error) {
         setMessage(error.message);
+      } finally {
+        setLocalBusyText("");
       }
     });
   }
@@ -710,6 +725,7 @@ export function ProjectWorkbench({ projectId }) {
   function saveCurrentSubject(regenerate = false) {
     startTransition(async () => {
       try {
+        setLocalBusyText(regenerate ? "正在保存并重生成当前主体" : "正在保存当前主体");
         const latestDraft = deepClone(charactersDraft);
         await saveArtifact("characters", latestDraft, regenerate ? "当前项已保存，准备重生成" : "当前项已保存");
         if (regenerate && currentSubject?.name) {
@@ -728,6 +744,32 @@ export function ProjectWorkbench({ projectId }) {
         }
       } catch (error) {
         setMessage(error.message || "处理失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  function renderSubjectReferences() {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在批量生成主体参考图");
+        const latestDraft = deepClone(charactersDraft);
+        await saveArtifact("characters", latestDraft, "主体分析已保存");
+        const res = await fetch(`/api/projects/${projectId}/subjects/render`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "生成参考图失败");
+        }
+        setProject(data);
+        setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
+        setMessage("主体参考图已生成");
+      } catch (error) {
+        setMessage(error.message || "生成失败");
+      } finally {
+        setLocalBusyText("");
       }
     });
   }
@@ -740,6 +782,9 @@ export function ProjectWorkbench({ projectId }) {
   const currentStageStatus = project.stageState?.[currentTab.stage]?.status;
   const job = project.currentJob;
   const jobRunning = job && ["queued", "running"].includes(job.status);
+  const busy = jobRunning || isPending;
+  const activeBusyText = localBusyText || job?.progressText || "";
+  const subjectReferenceCount = (project.artifacts?.subjectReferences || []).length;
 
   return (
     <section className="studio studio--workspace">
@@ -782,11 +827,11 @@ export function ProjectWorkbench({ projectId }) {
           {tab === "script" ? (
             <section className="studio-panel studio-main-panel">
               <div className="studio-panel__header">
-                <h2>故事输入</h2>
+                <h2>{adaptationDraft?.chapters?.[0]?.title || "第1章"}</h2>
                 <span className="studio-panel__meta">{storyText.length}/2000</span>
               </div>
               <textarea className="studio-editor" value={storyText} onChange={(event) => setStoryText(event.target.value)} />
-              <SceneCards adaptation={adaptationDraft} />
+              <ScriptSummary adaptation={adaptationDraft} />
             </section>
           ) : null}
 
@@ -794,7 +839,17 @@ export function ProjectWorkbench({ projectId }) {
             <section className="studio-panel studio-main-panel">
               <div className="studio-panel__header">
                 <h2>主体资产</h2>
-                <span className="studio-panel__meta">角色 / 场景 / 道具</span>
+                <span className="studio-panel__meta">分析主体后再批量生成参考图</span>
+              </div>
+              <div className="studio-subject-steps">
+                <div className="studio-summary-card">
+                  <span className="studio-section-label">步骤 1</span>
+                  <p>{project.stageState?.characters?.status === "done" ? "主体分析已完成" : "主体分析待执行"}</p>
+                </div>
+                <div className="studio-summary-card">
+                  <span className="studio-section-label">步骤 2</span>
+                  <p>{subjectReferenceCount ? `已生成 ${subjectReferenceCount} 份参考图` : "尚未生成参考图"}</p>
+                </div>
               </div>
               <SubjectTypeTabs payload={charactersDraft} kind={subjectKind} onChange={setSubjectKind} />
               <SubjectGrid
@@ -823,7 +878,7 @@ export function ProjectWorkbench({ projectId }) {
           {tab === "media" ? (
             <section className="studio-panel studio-main-panel">
               <div className="studio-panel__header">
-                <h2>画面与配音</h2>
+                <h2>故事板</h2>
               </div>
               <MediaCards shots={project.artifacts?.shots} />
             </section>
@@ -831,12 +886,12 @@ export function ProjectWorkbench({ projectId }) {
 
           {tab === "output" ? <OutputPanel project={project} /> : null}
 
-          {jobRunning ? (
+          {busy ? (
             <div className="studio-loading-mask">
               <div className="studio-loading-card">
                 <div className="studio-spinner" />
-                <strong>{job.status === "queued" ? "任务排队中" : "任务执行中"}</strong>
-                <span>{job.progressText || "正在处理中"}</span>
+                <strong>{jobRunning && job?.status === "queued" ? "任务排队中" : "正在处理中"}</strong>
+                <span>{activeBusyText || "正在处理中"}</span>
               </div>
             </div>
           ) : null}
@@ -845,7 +900,7 @@ export function ProjectWorkbench({ projectId }) {
         <aside className="studio-settings">
           <section className="studio-panel">
             <div className="studio-panel__header">
-              <h2>{tab === "characters" ? "生成主体图" : "阶段设置"}</h2>
+              <h2>{tab === "script" ? "全局设置" : tab === "characters" ? "主体设置" : "阶段设置"}</h2>
               <span className="studio-panel__meta">{stageStatusText(currentStageStatus)}</span>
             </div>
 
@@ -857,16 +912,63 @@ export function ProjectWorkbench({ projectId }) {
                     {modelOptions.adaptation.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
+                <div className="studio-field">
+                  <span>视频比例</span>
+                  <div className="studio-option-grid">
+                    {ratioOptions.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={models.scriptRatio === option ? "studio-option-card active" : "studio-option-card"}
+                        onClick={() => setModels((current) => ({ ...current, scriptRatio: option }))}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="studio-field">
+                  <span>创作模式</span>
+                  <div className="studio-option-grid studio-option-grid--wide">
+                    {createModeOptions.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={models.scriptMode === option ? "studio-option-card active" : "studio-option-card"}
+                        onClick={() => setModels((current) => ({ ...current, scriptMode: option }))}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="studio-field">
+                  <span>风格参考</span>
+                  <div className="studio-style-grid">
+                    {styleOptions.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={models.scriptStyle === option ? "studio-style-card active" : "studio-style-card"}
+                        onClick={() => setModels((current) => ({ ...current, scriptStyle: option }))}
+                      >
+                        <strong>{option}</strong>
+                        <span>确定整体质感与主体分析风格</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="studio-action-stack">
-                  <button className="studio-primary" type="button" onClick={() => runStage("adaptation")} disabled={isPending || jobRunning || !canRunStage(project, "adaptation", storyText)}>
-                    生成剧本
+                  <button className="studio-primary" type="button" onClick={() => runStage("adaptation")} disabled={busy || !canRunStage(project, "adaptation", storyText)}>
+                    主体提取
                   </button>
-                  <button className="studio-secondary" type="button" onClick={() => persistBase("已保存")} disabled={isPending || jobRunning}>
+                  <button className="studio-secondary" type="button" onClick={() => persistBase("剧本已保存")} disabled={busy}>
                     保存
                   </button>
-                  <button className="studio-secondary" type="button" onClick={() => setModalStage("script")}>
-                    编辑剧情
-                  </button>
+                </div>
+                <div className="studio-summary-card">
+                  <span className="studio-section-label">当前策略</span>
+                  <p>剧本阶段只确定文本、比例、风格与主体线索，不在这里拆剧情分镜。</p>
                 </div>
               </>
             ) : null}
@@ -874,14 +976,25 @@ export function ProjectWorkbench({ projectId }) {
             {tab === "characters" ? (
               <>
                 <label className="studio-field">
-                  <span>主体模型</span>
+                  <span>主体分析模型</span>
+                  <select value={models.characters || ""} onChange={(event) => setModels((current) => ({ ...current, characters: event.target.value }))}>
+                    {modelOptions.characters.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                </label>
+                <label className="studio-field">
+                  <span>参考图模型</span>
                   <select value={models.roleImage || ""} onChange={(event) => setModels((current) => ({ ...current, roleImage: event.target.value }))}>
                     {modelOptions.roleImage.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
-                <button className="studio-primary" type="button" onClick={() => runStage("characters")} disabled={isPending || jobRunning || !canRunStage(project, "characters", storyText)}>
-                  批量生成主体
-                </button>
+                <div className="studio-action-stack">
+                  <button className="studio-secondary" type="button" onClick={() => runStage("characters")} disabled={busy || !canRunStage(project, "characters", storyText)}>
+                    重新分析主体
+                  </button>
+                  <button className="studio-primary" type="button" onClick={renderSubjectReferences} disabled={busy || project.stageState?.characters?.status !== "done"}>
+                    生成参考图
+                  </button>
+                </div>
 
                 {currentSubject ? (
                   <div className="studio-detail-editor">
@@ -908,20 +1021,20 @@ export function ProjectWorkbench({ projectId }) {
                         className="studio-description"
                         value={subjectDescription(currentSubject, subjectKind)}
                         onChange={(event) => {
-                          if (subjectKind === "character") {
-                            updateCurrentSubject("continuity_prompt", event.target.value);
-                          } else {
-                            updateCurrentSubject("continuity_prompt", event.target.value);
+                          updateCurrentSubject("full_description", event.target.value);
+                          updateCurrentSubject("reference_prompt", event.target.value);
+                          updateCurrentSubject("continuity_prompt", event.target.value);
+                          if (subjectKind !== "character") {
                             updateCurrentSubject("description", event.target.value);
                           }
                         }}
                       />
                     </label>
                     <div className="studio-action-stack">
-                      <button className="studio-secondary" type="button" onClick={() => saveCurrentSubject(false)} disabled={isPending || jobRunning}>
+                      <button className="studio-secondary" type="button" onClick={() => saveCurrentSubject(false)} disabled={busy}>
                         保存当前项
                       </button>
-                      <button className="studio-primary" type="button" onClick={() => saveCurrentSubject(true)} disabled={isPending || jobRunning}>
+                      <button className="studio-primary" type="button" onClick={() => saveCurrentSubject(true)} disabled={busy}>
                         重生成当前项
                       </button>
                     </div>
@@ -941,7 +1054,7 @@ export function ProjectWorkbench({ projectId }) {
                   </select>
                 </label>
                 <div className="studio-action-stack">
-                  <button className="studio-primary" type="button" onClick={() => runStage("storyboard")} disabled={isPending || jobRunning || !canRunStage(project, "storyboard", storyText)}>
+                  <button className="studio-primary" type="button" onClick={() => runStage("storyboard")} disabled={busy || !canRunStage(project, "storyboard", storyText)}>
                     生成分镜
                   </button>
                   <button className="studio-secondary" type="button" onClick={() => setModalStage("storyboard")}>
@@ -959,8 +1072,8 @@ export function ProjectWorkbench({ projectId }) {
                     {modelOptions.shotImage.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
-                <button className="studio-primary" type="button" onClick={() => runStage("media")} disabled={isPending || jobRunning || !canRunStage(project, "media", storyText)}>
-                  生成画面
+                <button className="studio-primary" type="button" onClick={() => runStage("media")} disabled={busy || !canRunStage(project, "media", storyText)}>
+                  生成故事板
                 </button>
               </>
             ) : null}
@@ -974,10 +1087,10 @@ export function ProjectWorkbench({ projectId }) {
                   </select>
                 </label>
                 <div className="studio-action-stack">
-                  <button className="studio-secondary" type="button" onClick={() => runStage("output")} disabled={isPending || jobRunning || !canRunStage(project, "output", storyText)}>
+                  <button className="studio-secondary" type="button" onClick={() => runStage("output")} disabled={busy || !canRunStage(project, "output", storyText)}>
                     静态合成
                   </button>
-                  <button className="studio-primary" type="button" onClick={() => runStage("video")} disabled={isPending || jobRunning || !canRunStage(project, "video", storyText)}>
+                  <button className="studio-primary" type="button" onClick={() => runStage("video")} disabled={busy || !canRunStage(project, "video", storyText)}>
                     视频生成
                   </button>
                 </div>
