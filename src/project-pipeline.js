@@ -97,6 +97,126 @@ function uniqueNamesFromText(text) {
   return uniq.slice(0, 2);
 }
 
+function collectScriptText(adaptation) {
+  return [
+    adaptation?.script_text || "",
+    ...(adaptation?.chapters || []).map((item) => item.content || item.summary || ""),
+  ].join("\n");
+}
+
+function extractCharacterCandidates(adaptation) {
+  const text = collectScriptText(adaptation);
+  const stop = new Set([
+    "项目",
+    "样片",
+    "会议室",
+    "数据",
+    "剧情",
+    "角色",
+    "镜头",
+    "场景",
+    "场戏",
+    "深夜",
+    "真人剧",
+    "点众",
+    "科技",
+    "业务",
+    "模型",
+    "链路",
+    "旁白",
+    "用户",
+    "理由",
+    "技术",
+    "参数",
+    "生成",
+    "界面",
+    "剧情片",
+    "台词",
+    "模块",
+    "晨光",
+    "百叶",
+    "发送",
+    "键转",
+  ]);
+
+  const patterns = [
+    /(?:^|[，。；：、\s\n“”"'‘’【】（）()])([\u4e00-\u9fa5]{2,3})(?=(?:将|把|对|向|在|从|正|默默|突然|快速|调试|收到|冲进|走进|看着|盯着|按住|说|问|答|听|拿|坐|站|抬|调出))/g,
+    /(?:^|[，。；：、\s\n“”"'‘’【】（）()])([\u4e00-\u9fa5]{2,3})(?=[:：])/g,
+  ];
+
+  const names = [];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = match[1];
+      if (!value || stop.has(value) || names.includes(value)) {
+        continue;
+      }
+      names.push(value);
+    }
+  }
+
+  if (!names.length) {
+    for (const value of uniqueNamesFromText(text)) {
+      if (!stop.has(value) && !names.includes(value)) {
+        names.push(value);
+      }
+    }
+  }
+
+  return names.slice(0, 3);
+}
+
+function isLikelyCharacterName(name, adaptation) {
+  const scriptText = collectScriptText(adaptation);
+  if (!name || !scriptText) {
+    return false;
+  }
+  if (!scriptText.includes(name)) {
+    return false;
+  }
+  const banned = ["工牌", "键盘", "报告", "进度条", "工作台", "会议室", "玻璃", "倒影", "样片", "标题", "平台", "午夜"];
+  return !banned.some((item) => name.includes(item));
+}
+
+function sanitizeCharacterPayload(payload, adaptation) {
+  const candidates = extractCharacterCandidates(adaptation);
+  const next = {
+    ...payload,
+    characters: [...(payload.characters || [])],
+  };
+
+  next.characters = next.characters.map((item, index) => {
+    const fallbackName = candidates[index] || item.name || `角色${index + 1}`;
+    const name = isLikelyCharacterName(item.name, adaptation) ? item.name : fallbackName;
+    return {
+      ...item,
+      name,
+      reference_prompt: String(item.reference_prompt || "").replaceAll(item.name || "", name),
+      continuity_prompt: String(item.continuity_prompt || "").replaceAll(item.name || "", name),
+    };
+  });
+
+  if (!next.characters.length && candidates.length) {
+    next.characters = candidates.slice(0, 2).map((name, index) => ({
+      name,
+      role: `核心角色${index + 1}`,
+      gender: index === 0 ? "female" : "male",
+      age_range: index === 0 ? "28-35" : "26-33",
+      personality: ["清晰", "稳定"],
+      appearance: "角色外形待补充",
+      wardrobe: "稳定主造型待补充",
+      visual_anchor: ["主造型", "面部识别点"],
+      full_description: "",
+      reference_prompt: "",
+      continuity_prompt: `${name}，角色主造型稳定，脸部特征与服装轮廓保持一致。`,
+      negative_prompt: "卡通感、设定稿崩坏、三视图不统一、多人入镜",
+      voice_style: "自然",
+    }));
+  }
+
+  return next;
+}
+
 function inferStyleFromAdaptation(adaptation) {
   return adaptation?.style_preset || "写实";
 }
@@ -149,8 +269,7 @@ function buildProfessionalCharacterDescription({
 }
 
 function buildFallbackCharacters(adaptation) {
-  const source = JSON.stringify(adaptation);
-  const [nameA = "主角甲", nameB = "主角乙"] = uniqueNamesFromText(source);
+  const [nameA = "主角甲", nameB = "主角乙"] = extractCharacterCandidates(adaptation);
   const style = inferStyleFromAdaptation(adaptation);
   return {
     characters: [
@@ -677,7 +796,10 @@ async function analyzeSubjects(project, client, paths, manifest, onProgress) {
     fileStem: "characters",
     fallbackFactory: () => buildFallbackCharacters(adaptation),
   });
-  const subjectPayload = normalizeCharacterStagePayload(payload, adaptation);
+  const subjectPayload = sanitizeCharacterPayload(
+    normalizeCharacterStagePayload(payload, adaptation),
+    adaptation,
+  );
   await writeJson(path.join(paths.dirs.characters, "characters.json"), subjectPayload);
   upsertStageRecord(manifest, "characters", project.models.characters, "03-characters/characters.json");
   manifest.outputs.characters = "03-characters/characters.json";
