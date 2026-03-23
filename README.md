@@ -79,3 +79,9 @@ output/runs/<timestamp>/comparisons/image/
 - 画面生成更适合图像模型，重点看角色一致性和镜头感。
 - 配音更适合语音模型，重点看情绪和角色区分。
 - 七牛 MAAS/Sufy 在这里承担统一模型接入层，业务代码不用散落地直连不同厂商。
+
+## 协作方式
+
+- 需求和改进项放在 GitHub Issues。
+- 具体改动通过分支和 Pull Request 推进。
+- 当前路线图见 [docs/roadmap.md](docs/roadmap.md)。
