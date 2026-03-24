@@ -1,6 +1,6 @@
 import { extractJson, normalizeChatText } from "../utils.js";
 import { buildImageRequest, resolveImagePayload } from "./image-runtime.js";
-import { buildVideoTaskBody, parseVideoTaskResult } from "./video-runtime.js";
+import { buildVideoTaskRequest, parseVideoTaskResult } from "./video-runtime.js";
 
 function normalizeProviderError(message, fallback) {
   const text = String(message || fallback || "").trim();
@@ -25,6 +25,10 @@ export class QiniuMaaSClient {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.apiKey}`,
     };
+  }
+
+  rootBaseUrl() {
+    return this.baseUrl.replace(/\/v1$/, "");
   }
 
   async listModels() {
@@ -145,55 +149,7 @@ export class QiniuMaaSClient {
     enableAudio = false,
     resolution = "",
   }) {
-    if (model.startsWith("veo-")) {
-      const instance = {
-        prompt,
-        image: imageBuffer
-          ? {
-              bytesBase64Encoded: imageBuffer.toString("base64"),
-              mimeType: "image/png",
-            }
-          : undefined,
-        aspectRatio,
-      };
-      if (lastFrameBuffer) {
-        instance.lastFrame = {
-          bytesBase64Encoded: lastFrameBuffer.toString("base64"),
-          mimeType: "image/png",
-        };
-      }
-      const parameters = {
-        durationSeconds: Math.max(4, Math.min(8, Math.round(seconds))),
-        sampleCount: 1,
-        generateAudio: Boolean(enableAudio),
-      };
-      if (resolution) {
-        parameters.resolution = resolution;
-      }
-      const response = await fetch(`${this.baseUrl}/videos/generations`, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({
-          model,
-          instances: [instance],
-          parameters,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(normalizeProviderError(
-          payload?.error?.message,
-          `Video task creation failed with ${response.status}`,
-        ));
-      }
-      return {
-        provider: "veo",
-        id: payload.id || payload.name,
-        raw: payload,
-      };
-    }
-
-    const body = buildVideoTaskBody({
+    const request = buildVideoTaskRequest({
       model,
       prompt,
       imageBuffer,
@@ -206,10 +162,11 @@ export class QiniuMaaSClient {
       resolution,
     });
 
-    const response = await fetch(`${this.baseUrl}/videos`, {
+    const requestBaseUrl = request.provider === "vidu" ? this.rootBaseUrl() : this.baseUrl;
+    const response = await fetch(`${requestBaseUrl}${request.endpoint}`, {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify(body),
+      body: JSON.stringify(request.body),
     });
     const payload = await response.json();
     if (!response.ok) {
@@ -219,8 +176,8 @@ export class QiniuMaaSClient {
       ));
     }
     return {
-      provider: "openai",
-      id: payload.id,
+      provider: request.provider,
+      id: payload.id || payload.request_id || payload.name,
       raw: payload,
     };
   }
@@ -228,7 +185,9 @@ export class QiniuMaaSClient {
   async getVideoTask({ model, provider, id }) {
     const endpoint = provider === "veo"
       ? `${this.baseUrl}/videos/generations/${id}`
-      : `${this.baseUrl}/videos/${id}`;
+      : provider === "vidu"
+        ? `${this.rootBaseUrl()}/queue/fal-ai/vidu/requests/${id}/status`
+        : `${this.baseUrl}/videos/${id}`;
     const response = await fetch(endpoint, {
       headers: this.headers(),
     });

@@ -698,12 +698,22 @@ export function MediaWorkbenchPanel({
               </div>
               {capabilities.supports_first_frame || capabilities.supports_last_frame ? (
                 <div className="studio-inline-note">
-                  当前支持首尾帧的视频模型：Veo 3.1 Fast、Veo 3.1、Kling V2.1、Kling V2.5 Turbo、Kling V2.6、Kling Video O1。
+                  当前模型支持首帧/尾帧控制。首尾帧是否可与额外参考图混用，取决于具体模型能力与接口限制。
                 </div>
               ) : null}
-              {["kling-v2-5-turbo", "kling-v2-6"].includes(String(models.shotVideo || "")) ? (
+              {["kling-v2-1", "kling-v2-5-turbo", "kling-v2-6"].includes(String(models.shotVideo || "")) ? (
                 <div className="studio-inline-note">
-                  当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1。
+                  当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1 或 Kling V3 Omni。
+                </div>
+              ) : null}
+              {String(models.shotVideo || "") === "kling-v3" ? (
+                <div className="studio-inline-note">
+                  Kling V3 支持文生、单参考图生和首尾帧视频。若要同时使用多张参考图或参考视频，请切到 Kling V3 Omni。
+                </div>
+              ) : null}
+              {String(models.shotVideo || "").startsWith("viduq3-") ? (
+                <div className="studio-inline-note">
+                  Vidu Q3 当前按文档支持文生、单图生和首尾帧视频。当前工作台会优先使用 1 张参考图或 1 组首尾帧，不支持额外主体参考图混用。
                 </div>
               ) : null}
               {String(models.shotVideo || "").startsWith("sora-") ? (
