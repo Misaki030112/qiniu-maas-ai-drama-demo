@@ -133,25 +133,40 @@ export class QiniuMaaSClient {
     };
   }
 
-  async createVideoTask({ model, prompt, imageBuffer, seconds = 5, aspectRatio = "16:9" }) {
+  async createVideoTask({
+    model,
+    prompt,
+    imageBuffer,
+    lastFrameBuffer,
+    referenceImages = [],
+    seconds = 5,
+    aspectRatio = "16:9",
+    enableAudio = false,
+    resolution = "",
+  }) {
     if (model.startsWith("veo-")) {
+      const instance = {
+        prompt,
+        image: imageBuffer
+          ? {
+              bytesBase64Encoded: imageBuffer.toString("base64"),
+              mimeType: "image/png",
+            }
+          : undefined,
+        aspectRatio,
+      };
+      if (lastFrameBuffer) {
+        instance.lastFrame = {
+          bytesBase64Encoded: lastFrameBuffer.toString("base64"),
+          mimeType: "image/png",
+        };
+      }
       const response = await fetch(`${this.baseUrl}/videos/generations`, {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify({
           model,
-          instances: [
-            {
-              prompt,
-              image: imageBuffer
-                ? {
-                    bytesBase64Encoded: imageBuffer.toString("base64"),
-                    mimeType: "image/png",
-                  }
-                : undefined,
-              aspectRatio,
-            },
-          ],
+          instances: [instance],
         }),
       });
       const payload = await response.json();
@@ -172,8 +187,12 @@ export class QiniuMaaSClient {
       model,
       prompt,
       imageBuffer,
+      lastFrameBuffer,
+      referenceImages,
       seconds,
       aspectRatio,
+      enableAudio,
+      resolution,
     });
 
     const response = await fetch(`${this.baseUrl}/videos`, {

@@ -21,33 +21,78 @@ export function resolveVideoSize(aspectRatio = "16:9") {
   }[aspectRatio] || "1280x720";
 }
 
-export function buildVideoTaskBody({ model, prompt, imageBuffer, seconds, aspectRatio }) {
+function toImageListEntry(buffer, type = "subject") {
+  if (!buffer) {
+    return null;
+  }
+  return {
+    image: buffer.toString("base64"),
+    type,
+  };
+}
+
+function toReferenceEntry(item) {
+  if (!item) {
+    return null;
+  }
+  if (item.base64) {
+    return {
+      image: item.base64,
+      type: "subject",
+    };
+  }
+  return null;
+}
+
+export function buildVideoTaskBody({
+  model,
+  prompt,
+  imageBuffer,
+  lastFrameBuffer,
+  referenceImages = [],
+  seconds,
+  aspectRatio,
+  enableAudio = false,
+  resolution = "",
+}) {
   const body = {
     model,
     prompt,
     seconds: normalizeVideoSeconds(model, seconds),
-    size: resolveVideoSize(aspectRatio),
+    size: resolution || resolveVideoSize(aspectRatio),
   };
 
-  if (imageBuffer) {
+  if (imageBuffer || lastFrameBuffer || referenceImages.length) {
     if (model.startsWith("kling-")) {
-      body.image_list = [
-        {
-          image: imageBuffer.toString("base64"),
-        },
-      ];
+      const imageList = [
+        imageBuffer ? toImageListEntry(imageBuffer, "first_frame") : null,
+        lastFrameBuffer ? toImageListEntry(lastFrameBuffer, "end_frame") : null,
+        ...referenceImages.map(toReferenceEntry),
+      ].filter(Boolean);
+
+      if (!imageList.length) {
+        throw new Error(`模型 ${model} 缺少有效参考素材。`);
+      }
+
+      body.image_list = imageList;
+      if (enableAudio) {
+        body.audio = true;
+      }
+      return body;
+    }
+
+    if (model.startsWith("veo-")) {
       return body;
     }
 
     if (model.startsWith("sora-")) {
       throw new Error("Sora 图生视频当前需要公开可访问的参考图 URL，当前项目暂未接入该上传链路。");
     }
-
     if (model.startsWith("vidu")) {
       throw new Error("Vidu 图生视频参数暂未按官方文档接入，请先使用 Kling 或 Veo。");
     }
-  } else if (model === "kling-v2-1") {
-    throw new Error("kling-v2-1 仅支持图生视频，请先提供参考图。");
+  } else if (["kling-v2-1", "kling-v2-5-turbo", "kling-video-o1"].includes(model)) {
+    throw new Error(`${model} 仅支持图生视频，请先提供首帧或参考图。`);
   }
 
   return body;

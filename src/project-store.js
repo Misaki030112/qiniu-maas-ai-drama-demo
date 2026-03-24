@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { databaseSchema, query } from "./db.js";
+import { mapMediaWorkbenchUrls, normalizeMediaWorkbench } from "./media-workbench.js";
 import { ensureDir, makeRunId, readJson, readText, writeJson, writeText } from "./utils.js";
 
 export const stageOrder = [
@@ -399,6 +400,11 @@ export function getProjectPaths(projectId) {
   };
 }
 
+export function getMediaWorkbenchPath(projectId) {
+  const paths = getProjectPaths(projectId);
+  return path.join(paths.dirs.images, "media-workbench.json");
+}
+
 export async function ensureProjectWorkspace(projectId) {
   const paths = getProjectPaths(projectId);
   await ensureDir(paths.dataDir);
@@ -784,6 +790,54 @@ export async function saveProjectArtifact(projectId, stage, value) {
   return readProjectDetail(projectId);
 }
 
+export async function readMediaWorkbench(projectId) {
+  const paths = getProjectPaths(projectId);
+  const manifest = await readOptionalJson(paths.manifestPath);
+  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  const normalizedCharacters = normalizeCharacterStagePayload(characters, adaptation);
+  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
+  const workbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
+  const normalizedStoryboard = normalizeStoryboardPayload(storyboard, adaptation);
+  return normalizeMediaWorkbench(workbench, normalizedStoryboard, normalizedCharacters, manifest);
+}
+
+export async function saveMediaWorkbench(projectId, value) {
+  const paths = await ensureProjectWorkspace(projectId);
+  const normalized = await readMediaWorkbench(projectId);
+  const next = {
+    ...normalized,
+    ...value,
+    updatedAt: nowIso(),
+  };
+  await writeJson(getMediaWorkbenchPath(projectId), next);
+  return next;
+}
+
+export async function patchMediaShot(projectId, shotId, patch) {
+  const workbench = await readMediaWorkbench(projectId);
+  const index = workbench.shots.findIndex((item) => item.shot_id === shotId);
+  if (index === -1) {
+    throw new Error("未找到当前镜头。");
+  }
+  const current = workbench.shots[index];
+  workbench.shots[index] = {
+    ...current,
+    ...patch,
+    reference_images: patch.reference_images ?? current.reference_images,
+    frame_assets: patch.frame_assets ?? current.frame_assets,
+    video_assets: patch.video_assets ?? current.video_assets,
+    subject_refs: patch.subject_refs ?? current.subject_refs,
+    video_options: patch.video_options ? { ...(current.video_options || {}), ...patch.video_options } : current.video_options,
+    audio_config: patch.audio_config ? { ...current.audio_config, ...patch.audio_config } : current.audio_config,
+    audio_asset: patch.audio_asset !== undefined ? patch.audio_asset : current.audio_asset,
+    lip_sync_asset: patch.lip_sync_asset !== undefined ? patch.lip_sync_asset : current.lip_sync_asset,
+  };
+  workbench.updatedAt = nowIso();
+  await writeJson(getMediaWorkbenchPath(projectId), workbench);
+  return workbench;
+}
+
 export async function readProjectDetail(projectId) {
   const project = await readProject(projectId);
   const paths = getProjectPaths(projectId);
@@ -825,6 +879,15 @@ export async function readProjectDetail(projectId) {
     audioUrl: shot.audioPath ? `/api/projects/${projectId}/artifacts/${shot.audioPath}` : "",
     segmentUrl: shot.segmentPath ? `/api/projects/${projectId}/artifacts/${shot.segmentPath}` : "",
   }));
+  const mediaWorkbench = mapMediaWorkbenchUrls(
+    projectId,
+    normalizeMediaWorkbench(
+      await readOptionalJson(getMediaWorkbenchPath(projectId)),
+      normalizedStoryboard,
+      normalizedCharacters,
+      manifest,
+    ),
+  );
   const currentJob = await readCurrentJob(projectId);
 
   return {
@@ -844,6 +907,7 @@ export async function readProjectDetail(projectId) {
       sceneReferences,
       propReferences,
       shots,
+      mediaWorkbench,
       outputVideoUrl: manifest?.outputs?.outputVideo
         ? `/api/projects/${projectId}/artifacts/${manifest.outputs.outputVideo}`
         : "",

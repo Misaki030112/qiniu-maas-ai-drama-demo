@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { MediaWorkbenchPanel } from "./MediaWorkbenchPanel.js";
 
 const tabs = [
   { id: "script", label: "剧本", stage: "adaptation" },
@@ -41,7 +42,19 @@ const defaultModelOptions = {
     "kling-v2-new",
     "kling-v1-5",
   ],
-  shotVideo: ["veo-3.1-fast-generate-001", "veo-3.1-generate-001", "sora-2", "sora-2-pro", "kling-v3", "kling-v3-omni", "viduq3-turbo", "viduq3-pro"],
+  shotVideo: [
+    "veo-3.1-fast-generate-001",
+    "veo-3.1-generate-001",
+    "sora-2",
+    "sora-2-pro",
+    "kling-v2-1",
+    "kling-v2-5-turbo",
+    "kling-video-o1",
+    "kling-v3",
+    "kling-v3-omni",
+    "viduq3-turbo",
+    "viduq3-pro",
+  ],
 };
 
 const ratioOptions = [
@@ -641,26 +654,6 @@ function StoryboardBoard({
   ) : <EmptyCard title="当前还没有分镜结果" detail="先完成主体阶段。" />;
 }
 
-function MediaCards({ shots }) {
-  return shots?.length ? (
-    <section className="studio-shot-grid">
-      {shots.map((shot) => (
-        <article key={shot.shotId} className="studio-shot">
-          {shot.imageUrl ? <img src={shot.imageUrl} alt={shot.shotId} /> : null}
-          <strong>{shot.shotId}</strong>
-          <span>{shot.speaker}</span>
-          <p>{shot.subtitle}</p>
-          <div className="studio-shot__meta">
-            <span>图片：{shot.imageStatus === "ok" ? "已生成" : "回退"}</span>
-            <span>配音：{shot.audioStatus === "ok" ? "已生成" : "回退"}</span>
-          </div>
-          {shot.audioUrl ? <audio controls src={shot.audioUrl} /> : null}
-        </article>
-      ))}
-    </section>
-  ) : <EmptyCard title="当前还没有画面结果" detail="先生成画面和配音。" />;
-}
-
 function OutputPanel({ project }) {
   const staticUrl = project.artifacts?.outputVideoUrl;
   const videoUrl = project.artifacts?.videoOutputUrl;
@@ -1123,16 +1116,23 @@ export function ProjectWorkbench({ projectId }) {
   const bootedRef = useRef(false);
   const storyboardImportRef = useRef(null);
 
-  async function loadProject(options = {}) {
-    const { preserveTab = true } = options;
-    const res = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
-    const data = await res.json();
+  function applyProjectData(data, options = {}) {
+    const { preserveStoryText = false } = options;
     setProject(data);
-    setStoryText(data.storyText || data.artifacts?.storyText || "");
+    if (!preserveStoryText) {
+      setStoryText(data.storyText || data.artifacts?.storyText || "");
+    }
     setModels(data.models || {});
     setAdaptationDraft(data.artifacts?.adaptation || { scenes: [] });
     setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
     setStoryboardDraft(data.artifacts?.storyboard || emptyStoryboardDraft);
+  }
+
+  async function loadProject(options = {}) {
+    const { preserveTab = true } = options;
+    const res = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
+    const data = await res.json();
+    applyProjectData(data);
     if (!bootedRef.current || !preserveTab) {
       setTab(nextTabFromProject(data));
       bootedRef.current = true;
@@ -1197,6 +1197,7 @@ export function ProjectWorkbench({ projectId }) {
   const storyboardGroups = storyboardDraft?.groups || [];
   const storyboardItems = storyboardGroups.flatMap((group) => (group.items || []).map((item) => ({ ...item, group_id: group.group_id })));
   const currentStoryboardItem = storyboardItems.find((item) => item.item_id === selectedStoryboardItemId) || null;
+  const mediaWorkbench = project?.artifacts?.mediaWorkbench || { shots: [] };
 
   useEffect(() => {
     if (tab !== "storyboard") {
@@ -1221,7 +1222,7 @@ export function ProjectWorkbench({ projectId }) {
       if (!res.ok) {
         throw new Error(data.message || "保存失败");
       }
-      setProject(data);
+      applyProjectData(data, { preserveStoryText: true });
       if (nextMessage) {
         setMessage(nextMessage);
       }
@@ -1239,11 +1240,22 @@ export function ProjectWorkbench({ projectId }) {
     if (!res.ok) {
       throw new Error(data.message || "保存失败");
     }
-    setProject(data);
-    setAdaptationDraft(data.artifacts?.adaptation || { scenes: [] });
-    setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
-    setStoryboardDraft(data.artifacts?.storyboard || emptyStoryboardDraft);
+    applyProjectData(data, { preserveStoryText: true });
     setMessage(nextMessage);
+    return data;
+  }
+
+  async function persistModelsOnly() {
+    const res = await fetch(`/api/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || "保存模型失败");
+    }
+    applyProjectData(data, { preserveStoryText: true });
     return data;
   }
 
@@ -1261,7 +1273,7 @@ export function ProjectWorkbench({ projectId }) {
         if (!res.ok) {
           throw new Error(data.message || "执行失败");
         }
-        setProject(data);
+        applyProjectData(data, { preserveStoryText: true });
         setMessage("任务已提交");
       } catch (error) {
         setMessage(error.message);
@@ -1410,8 +1422,7 @@ export function ProjectWorkbench({ projectId }) {
           if (!res.ok) {
             throw new Error(data.message || "重生成失败");
           }
-          setProject(data);
-          setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
+          applyProjectData(data, { preserveStoryText: true });
           setMessage("当前项已重生成");
         }
       } catch (error) {
@@ -1436,8 +1447,7 @@ export function ProjectWorkbench({ projectId }) {
         if (!res.ok) {
           throw new Error(data.message || "生成参考图失败");
         }
-        setProject(data);
-        setCharactersDraft(data.artifacts?.characters || { characters: [], scenes: [], props: [] });
+        applyProjectData(data, { preserveStoryText: true });
         setMessage("主体参考图已生成");
       } catch (error) {
         setMessage(error.message || "生成失败");
@@ -1694,6 +1704,236 @@ export function ProjectWorkbench({ projectId }) {
     reader.readAsText(file, "utf-8");
   }
 
+  function patchMediaShotLocal(shotId, patch) {
+    setProject((current) => {
+      if (!current?.artifacts?.mediaWorkbench) {
+        return current;
+      }
+      return {
+        ...current,
+        artifacts: {
+          ...current.artifacts,
+          mediaWorkbench: {
+            ...current.artifacts.mediaWorkbench,
+            shots: (current.artifacts.mediaWorkbench.shots || []).map((shot) =>
+              shot.shot_id === shotId
+                ? {
+                    ...shot,
+                    ...patch,
+                    subject_refs: patch.subject_refs ?? shot.subject_refs,
+                    reference_images: patch.reference_images ?? shot.reference_images,
+                    frame_assets: patch.frame_assets ?? shot.frame_assets,
+                    video_assets: patch.video_assets ?? shot.video_assets,
+                    video_options: patch.video_options ? { ...(shot.video_options || {}), ...patch.video_options } : shot.video_options,
+                    audio_config: patch.audio_config ? { ...(shot.audio_config || {}), ...patch.audio_config } : shot.audio_config,
+                  }
+                : shot,
+            ),
+          },
+        },
+      };
+    });
+  }
+
+  function patchMediaShot(shotId, patch) {
+    patchMediaShotLocal(shotId, patch);
+  }
+
+  async function persistMediaShotPayload(shotId, payload) {
+    await persistModelsOnly();
+    const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || "保存镜头失败");
+    }
+    applyProjectData(data, { preserveStoryText: true });
+    return data;
+  }
+
+  async function persistMediaShotSnapshot(shotId, patch = null) {
+    const localShot = (project?.artifacts?.mediaWorkbench?.shots || []).find((item) => item.shot_id === shotId);
+    const payload = patch ? { ...(localShot || {}), ...patch } : (localShot || {});
+    return await persistMediaShotPayload(shotId, payload);
+  }
+
+  function saveMediaShot(shotId, patch = null) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在保存当前镜头");
+        if (patch) {
+          patchMediaShotLocal(shotId, patch);
+        }
+        await persistMediaShotSnapshot(shotId, patch);
+        setMessage("当前镜头已保存");
+      } catch (error) {
+        setMessage(error.message || "保存失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  function generateMediaShotImageAction(shotId) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在生成当前镜头图片");
+        await persistMediaShotSnapshot(shotId);
+        const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/image`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "生成图片失败");
+        }
+        applyProjectData(data, { preserveStoryText: true });
+        setMessage("当前镜头图片已生成");
+      } catch (error) {
+        setMessage(error.message || "生成图片失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  function generateMediaShotVideoAction(shotId, options = {}) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在生成当前镜头视频");
+        await persistMediaShotSnapshot(shotId);
+        const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/video`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(options),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "生成视频失败");
+        }
+        applyProjectData(data, { preserveStoryText: true });
+        setMessage("当前镜头视频已生成");
+      } catch (error) {
+        setMessage(error.message || "生成视频失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  function generateMediaShotAudioAction(shotId) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在生成当前镜头配音");
+        await persistMediaShotSnapshot(shotId);
+        const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/audio`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "生成配音失败");
+        }
+        applyProjectData(data, { preserveStoryText: true });
+        setMessage("当前镜头配音已生成");
+      } catch (error) {
+        setMessage(error.message || "生成配音失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  async function previewMediaShotAudio(shotId) {
+    try {
+      setLocalBusyText("正在生成试听");
+      await persistMediaShotSnapshot(shotId);
+      const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/audio?preview=1`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "试听失败");
+      }
+      return await res.blob();
+    } finally {
+      setLocalBusyText("");
+    }
+  }
+
+  function batchGenerateMedia(kind) {
+    startTransition(async () => {
+      try {
+        const shots = project?.artifacts?.mediaWorkbench?.shots || [];
+        if (!shots.length) {
+          throw new Error("当前没有可批量执行的镜头。");
+        }
+        setLocalBusyText(kind === "image" ? "正在批量生成镜头图片" : "正在批量生成镜头视频");
+        for (const shot of shots) {
+          await persistMediaShotPayload(shot.shot_id, shot);
+          const endpoint = kind === "image"
+            ? `/api/projects/${projectId}/media/shots/${encodeURIComponent(shot.shot_id)}/image`
+            : `/api/projects/${projectId}/media/shots/${encodeURIComponent(shot.shot_id)}/video`;
+          const body = kind === "video"
+            ? JSON.stringify({
+                durationSec: shot.video_options?.durationSec || shot.duration_sec || 4,
+                resolution: shot.video_options?.resolution || "",
+                enableAudio: Boolean(shot.video_options?.enableAudio),
+              })
+            : null;
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: body ? { "Content-Type": "application/json" } : undefined,
+            body,
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.message || `${shot.shot_no || shot.shot_id} 生成失败`);
+          }
+          applyProjectData(data, { preserveStoryText: true });
+        }
+        setMessage(kind === "image" ? "批量镜头图片生成完成" : "批量镜头视频生成完成");
+      } catch (error) {
+        setMessage(error.message || "批量执行失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  function uploadMediaReferenceImage(shotId, file) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在上传镜头参考图");
+        const form = new FormData();
+        form.append("file", file);
+        const uploadRes = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/reference-images`, {
+          method: "POST",
+          body: form,
+        });
+        const image = await uploadRes.json();
+        if (!uploadRes.ok) {
+          throw new Error(image.message || "上传参考图失败");
+        }
+        const currentShot = (project?.artifacts?.mediaWorkbench?.shots || []).find((item) => item.shot_id === shotId);
+        const nextRefs = [...(currentShot?.reference_images || []), image];
+        await persistMediaShotPayload(shotId, { ...(currentShot || {}), reference_images: nextRefs });
+        setMessage("镜头参考图已加入");
+      } catch (error) {
+        setMessage(error.message || "上传失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
+  function removeMediaReferenceImage(shotId, imagePath) {
+    const currentShot = (project?.artifacts?.mediaWorkbench?.shots || []).find((item) => item.shot_id === shotId);
+    const nextRefs = (currentShot?.reference_images || []).filter((item) => item.path !== imagePath);
+    saveMediaShot(shotId, { reference_images: nextRefs });
+  }
+
   if (!project) {
     return <div className="project-loading">加载中</div>;
   }
@@ -1736,7 +1976,17 @@ export function ProjectWorkbench({ projectId }) {
         </div>
       </header>
 
-      <div className={sideCollapsed ? "studio-body studio-body--workspace studio-body--side-collapsed" : "studio-body studio-body--workspace"}>
+      <div
+        className={
+          tab === "media"
+            ? sideCollapsed
+              ? "studio-body studio-body--workspace studio-body--media studio-body--side-collapsed"
+              : "studio-body studio-body--workspace studio-body--media"
+            : sideCollapsed
+              ? "studio-body studio-body--workspace studio-body--side-collapsed"
+              : "studio-body studio-body--workspace"
+        }
+      >
         <aside className={sideCollapsed ? "studio-side studio-side--collapsed" : "studio-side"}>
           <div className="studio-side__tools">
             <button
@@ -1825,10 +2075,25 @@ export function ProjectWorkbench({ projectId }) {
 
           {tab === "media" ? (
             <section className="studio-panel studio-main-panel">
-              <div className="studio-panel__header">
-                <h2>故事板</h2>
-              </div>
-              <MediaCards shots={project.artifacts?.shots} />
+              <MediaWorkbenchPanel
+                project={project}
+                workbench={mediaWorkbench}
+                models={models}
+                modelOptions={modelOptions}
+                onChangeModels={(patch) => setModels((current) => ({ ...current, ...patch }))}
+                onPatchShot={patchMediaShot}
+                onSaveShot={saveMediaShot}
+                onGenerateShotImage={generateMediaShotImageAction}
+                onGenerateShotVideo={generateMediaShotVideoAction}
+                onGenerateShotAudio={generateMediaShotAudioAction}
+                onPreviewShotAudio={previewMediaShotAudio}
+                onBatchGenerateImages={() => batchGenerateMedia("image")}
+                onBatchGenerateVideos={() => batchGenerateMedia("video")}
+                onUploadReferenceImage={uploadMediaReferenceImage}
+                onRemoveReferenceImage={removeMediaReferenceImage}
+                onNotify={setMessage}
+                busy={busy}
+              />
             </section>
           ) : null}
 
@@ -1845,6 +2110,7 @@ export function ProjectWorkbench({ projectId }) {
           </div>
         </main>
 
+        {tab !== "media" ? (
         <aside className="studio-settings">
           <section className="studio-panel">
             <div className="studio-panel__header">
@@ -2098,15 +2364,10 @@ export function ProjectWorkbench({ projectId }) {
 
             {tab === "media" ? (
               <>
-                <label className="studio-field">
-                  <span>画面模型</span>
-                  <select value={models.shotImage || ""} onChange={(event) => setModels((current) => ({ ...current, shotImage: event.target.value }))}>
-                    {modelOptions.shotImage.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
-                </label>
-                <button className="studio-primary" type="button" onClick={() => runStage("media")} disabled={busy || !canRunStage(project, "media", storyText)}>
-                  生成故事板
-                </button>
+                <div className="studio-summary-card">
+                  <span className="studio-section-label">当前模式</span>
+                  <p>故事板阶段已切换成镜头级制作工作台。中间区聚焦当前镜头，右侧分别处理绘图、视频和台词配音。</p>
+                </div>
               </>
             ) : null}
 
@@ -2135,6 +2396,7 @@ export function ProjectWorkbench({ projectId }) {
             </div>
           </section>
         </aside>
+        ) : null}
       </div>
 
       {modalStage === "script" && adaptationDraft ? (

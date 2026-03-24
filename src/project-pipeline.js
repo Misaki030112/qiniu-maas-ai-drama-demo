@@ -18,15 +18,26 @@ import {
   writeText,
 } from "./utils.js";
 import {
+  appendFrameAsset,
+  appendVideoAsset,
+  buildReferenceInputs,
+  createAudioAsset,
+  createFrameAsset,
+  createVideoAsset,
+} from "./media-workbench.js";
+import {
   ensureProjectWorkspace,
   getProjectPaths,
+  patchMediaShot,
   normalizeCharacterStagePayload,
   normalizeStoryboardPayload,
+  readMediaWorkbench,
   readProject,
   readProjectDetail,
   writeProject,
 } from "./project-store.js";
 import { createPipelineLogger } from "./pipeline-logger.js";
+import { getVideoCapabilities } from "./video-capabilities.js";
 
 async function reportProgress(onProgress, progressText, payload = null) {
   if (!onProgress) {
@@ -343,6 +354,313 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
     model,
     generatedAt,
   };
+}
+
+function findSubjectReferenceAssets(projectDetail, refs = []) {
+  const all = [
+    ...(projectDetail?.artifacts?.roleReferences || []),
+    ...(projectDetail?.artifacts?.sceneReferences || []),
+    ...(projectDetail?.artifacts?.propReferences || []),
+  ];
+  return refs
+    .map((ref) => all.find((item) => item.kind === ref.kind && item.key === ref.key))
+    .filter(Boolean);
+}
+
+async function buildMediaReferenceInputs(projectDetail, paths, shot) {
+  const subjectAssets = findSubjectReferenceAssets(projectDetail, shot.subject_refs || []);
+  const combined = [
+    ...subjectAssets.map((item) => ({
+      path: item.imagePath || item.path,
+      name: item.name,
+    })),
+    ...(shot.reference_images || []).map((item) => ({
+      path: item.path,
+      name: item.name,
+    })),
+  ];
+  return buildReferenceInputs(paths.outputDir, combined);
+}
+
+function extractSelectedShotMedia(shot) {
+  const selectedFrame = (shot.frame_assets || []).find((item) => item.id === shot.selected_frame_asset_id)
+    || shot.frame_assets?.[0]
+    || null;
+  const selectedVideo = (shot.video_assets || []).find((item) => item.id === shot.selected_video_asset_id)
+    || shot.video_assets?.[0]
+    || null;
+  return { selectedFrame, selectedVideo };
+}
+
+function syncManifestShotsFromWorkbench(manifest, workbench) {
+  manifest.shots = (workbench?.shots || [])
+    .map((shot) => {
+      const { selectedFrame } = extractSelectedShotMedia(shot);
+      if (!selectedFrame || !shot.audio_asset?.path) {
+        return null;
+      }
+      return {
+        shotId: shot.shot_id,
+        speaker: shot.audio_config?.speaker || shot.speaker || "旁白",
+        durationSec: Number(shot.duration_sec || 4),
+        imageStatus: "ok",
+        audioStatus: "ok",
+        imagePath: selectedFrame.path,
+        audioPath: shot.audio_asset.path,
+        subtitle: shot.dialogue || shot.audio_config?.text || "",
+        videoPrompt: shot.video_prompt || "",
+        generatedAt: selectedFrame.generatedAt || shot.audio_asset.generatedAt,
+        imageModel: selectedFrame.model || "",
+      };
+    })
+    .filter(Boolean);
+}
+
+async function renderStaticSegmentForShot(paths, shot) {
+  const { selectedFrame } = extractSelectedShotMedia(shot);
+  if (!selectedFrame || !shot.audio_asset?.path) {
+    throw new Error("当前镜头缺少静帧或配音，无法生成片段。");
+  }
+  const outputPath = path.join(paths.dirs.video, `${shot.shot_id}.mp4`);
+  await renderSegment({
+    imagePath: path.join(paths.outputDir, selectedFrame.path),
+    audioPath: path.join(paths.outputDir, shot.audio_asset.path),
+    outputPath,
+    durationSec: Number(shot.duration_sec || 4),
+  });
+  return path.relative(paths.outputDir, outputPath);
+}
+
+async function markMediaArtifactsUpdated(project) {
+  project.stageState.media = {
+    status: "done",
+    updatedAt: new Date().toISOString(),
+    error: null,
+  };
+  project.stageState.output = {
+    status: "stale",
+    updatedAt: null,
+    error: null,
+  };
+  project.stageState.video = {
+    status: "stale",
+    updatedAt: null,
+    error: null,
+  };
+  await writeProject(project);
+}
+
+async function generateMediaShotImageInternal({ project, projectDetail, client, paths, manifest, shotId }) {
+  const workbench = await readMediaWorkbench(project.id);
+  const shot = workbench.shots.find((item) => item.shot_id === shotId);
+  if (!shot) {
+    throw new Error("未找到当前镜头。");
+  }
+
+  const logger = await createPipelineLogger({
+    projectId: project.id,
+    stage: "media",
+    outputDir: paths.outputDir,
+  });
+  const prompt = shot.image_prompt || shot.shot_description || "";
+  if (!prompt.trim()) {
+    throw new Error("当前镜头缺少图片提示词。");
+  }
+  const referenceImages = await buildMediaReferenceInputs(projectDetail, paths, shot);
+  const result = await logger.measure(
+    {
+      event: "ai",
+      step: `media_image:${shotId}`,
+      model: project.models.shotImage,
+      provider: "image",
+    },
+    () => client.generateImage({
+      model: project.models.shotImage,
+      prompt,
+      aspectRatio: project.models.scriptRatio || "16:9",
+      referenceImages,
+    }),
+  );
+  const safeId = shotId.replaceAll("/", "_");
+  const assetPath = path.join(paths.dirs.images, `${safeId}-${Date.now()}.png`);
+  await fs.writeFile(assetPath, result.buffer);
+  const relativePath = path.relative(paths.outputDir, assetPath);
+  const asset = createFrameAsset({
+    path: relativePath,
+    model: project.models.shotImage,
+    prompt,
+  });
+
+  const nextShot = appendFrameAsset(shot, asset);
+  await patchMediaShot(project.id, shotId, nextShot);
+  const nextWorkbench = await readMediaWorkbench(project.id);
+  syncManifestShotsFromWorkbench(manifest, nextWorkbench);
+  await saveManifest(project.id, manifest);
+  await markMediaArtifactsUpdated(project);
+  return readProjectDetail(project.id);
+}
+
+async function generateMediaShotAudioInternal({ project, client, paths, manifest, shotId, previewOnly = false }) {
+  const workbench = await readMediaWorkbench(project.id);
+  const shot = workbench.shots.find((item) => item.shot_id === shotId);
+  if (!shot) {
+    throw new Error("未找到当前镜头。");
+  }
+  const logger = await createPipelineLogger({
+    projectId: project.id,
+    stage: "media",
+    outputDir: paths.outputDir,
+  });
+  const text = shot.audio_config?.text || shot.dialogue || "";
+  if (!text.trim()) {
+    throw new Error("当前镜头缺少台词文本。");
+  }
+  const voiceType = shot.audio_config?.voiceType || config.qiniu.voices.narrator;
+  const result = await logger.measure(
+    {
+      event: "ai",
+      step: `media_audio:${shotId}`,
+      model: voiceType,
+      provider: "tts",
+    },
+    () => client.synthesizeSpeech({
+      text,
+      voiceType,
+      speedRatio: Number(shot.audio_config?.speedRatio || 1),
+    }),
+  );
+  if (previewOnly) {
+    return {
+      buffer: result.buffer,
+      durationMs: result.durationMs,
+      voiceType,
+    };
+  }
+
+  const safeId = shotId.replaceAll("/", "_");
+  const assetPath = path.join(paths.dirs.audio, `${safeId}-${Date.now()}.mp3`);
+  await fs.writeFile(assetPath, result.buffer);
+  const relativePath = path.relative(paths.outputDir, assetPath);
+  const asset = createAudioAsset({
+    path: relativePath,
+    voiceType,
+    durationMs: result.durationMs,
+  });
+  await patchMediaShot(project.id, shotId, {
+    audio_asset: asset,
+    duration_sec: Math.max(Number(shot.duration_sec || 4), (result.durationMs || 0) / 1000 + 0.35),
+  });
+  const nextWorkbench = await readMediaWorkbench(project.id);
+  syncManifestShotsFromWorkbench(manifest, nextWorkbench);
+  await saveManifest(project.id, manifest);
+  await markMediaArtifactsUpdated(project);
+  return readProjectDetail(project.id);
+}
+
+async function generateMediaShotVideoInternal({ project, projectDetail, client, paths, manifest, shotId, videoOptions = {} }) {
+  const workbench = await readMediaWorkbench(project.id);
+  const shot = workbench.shots.find((item) => item.shot_id === shotId);
+  if (!shot) {
+    throw new Error("未找到当前镜头。");
+  }
+  const capability = getVideoCapabilities(project.models.shotVideo);
+  const logger = await createPipelineLogger({
+    projectId: project.id,
+    stage: "media",
+    outputDir: paths.outputDir,
+  });
+  const mergedVideoOptions = {
+    ...(shot.video_options || {}),
+    ...(videoOptions || {}),
+  };
+  const { selectedFrame } = extractSelectedShotMedia(shot);
+  const referenceInputs = await buildMediaReferenceInputs(projectDetail, paths, shot);
+  const resolvedTailFramePath = (() => {
+    const value = mergedVideoOptions.tailFramePath || "";
+    if (value) {
+      return value;
+    }
+    const selectedId = mergedVideoOptions.lastFrameAssetId || "";
+    if (!selectedId) {
+      return "";
+    }
+    const frame = (shot.frame_assets || []).find((item) => item.id === selectedId);
+    if (frame?.path) {
+      return frame.path;
+    }
+    const ref = (shot.reference_images || []).find((item) => `ref:${item.id || item.path}` === selectedId || item.id === selectedId);
+    return ref?.path || "";
+  })();
+  const firstFrame = capability.supports_first_frame && videoOptions.useFirstFrame !== false && selectedFrame?.path
+    ? await fs.readFile(path.join(paths.outputDir, selectedFrame.path))
+    : null;
+  const tailFrame = capability.supports_last_frame && resolvedTailFramePath
+    ? await fs.readFile(path.join(paths.outputDir, resolvedTailFramePath))
+    : null;
+  const prompt = shot.video_prompt || shot.image_prompt || shot.shot_description || "";
+  if (!prompt.trim()) {
+    throw new Error("当前镜头缺少视频提示词。");
+  }
+  const task = await logger.measure(
+    {
+      event: "ai",
+      step: `media_video:${shotId}`,
+      model: project.models.shotVideo,
+      provider: "video",
+      meta: {
+        capability: [
+          capability.supports_first_frame ? "首帧" : "",
+          capability.supports_last_frame ? "尾帧" : "",
+          capability.supports_subject_reference ? "主体参考" : "",
+        ].filter(Boolean).join(" / "),
+      },
+    },
+    () => client.createVideoTask({
+      model: project.models.shotVideo,
+      prompt,
+      imageBuffer: firstFrame,
+      lastFrameBuffer: tailFrame,
+      referenceImages: capability.supports_reference_images || capability.supports_subject_reference ? referenceInputs : [],
+      seconds: Number(mergedVideoOptions.durationSec || shot.duration_sec || 5),
+      aspectRatio: project.models.scriptRatio || "16:9",
+      enableAudio: capability.supports_audio_generation ? Boolean(mergedVideoOptions.enableAudio) : false,
+      resolution: mergedVideoOptions.resolution || "",
+    }),
+  );
+  const downloadUrl = await logger.measure(
+    {
+      event: "ai",
+      step: `media_video_poll:${shotId}`,
+      model: project.models.shotVideo,
+      provider: task.provider,
+    },
+    () => pollVideoResult(client, project.models.shotVideo, task.provider, task.id),
+  );
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(`下载视频失败: ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const outputPath = path.join(paths.dirs.videoModel, `${shotId.replaceAll("/", "_")}-${Date.now()}.mp4`);
+  await fs.writeFile(outputPath, buffer);
+  const relativePath = path.relative(paths.outputDir, outputPath);
+  const asset = createVideoAsset({
+    path: relativePath,
+    model: project.models.shotVideo,
+    prompt,
+    durationSec: Number(mergedVideoOptions.durationSec || shot.duration_sec || 5),
+    provider: task.provider,
+    settings: {
+      useFirstFrame: Boolean(firstFrame),
+      useLastFrame: Boolean(tailFrame),
+      referenceCount: referenceInputs.length,
+      enableAudio: Boolean(mergedVideoOptions.enableAudio),
+    },
+  });
+  await patchMediaShot(project.id, shotId, appendVideoAsset(shot, asset));
+  await saveManifest(project.id, manifest);
+  await markMediaArtifactsUpdated(project);
+  return readProjectDetail(project.id);
 }
 
 async function saveChatStage({
@@ -704,164 +1022,80 @@ async function executeStoryboard(project, client, paths, manifest, onProgress) {
 }
 
 async function executeMedia(project, client, paths, manifest, onProgress) {
-  await reportProgress(onProgress, "正在生成镜头图与配音");
-  const charactersPayload = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
-  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
-  if (!charactersPayload || !storyboard) {
-    throw new Error("请先完成分镜阶段。");
-  }
-  const characters = charactersPayload.characters || [];
-  const shots = storyboard.shots || [];
-  if (!shots.length) {
-    throw new Error("分镜里没有镜头。");
+  await reportProgress(onProgress, "正在按镜头批量生成静帧与配音");
+  const workbench = await readMediaWorkbench(project.id);
+  if (!workbench?.shots?.length) {
+    throw new Error("当前没有可执行的镜头。");
   }
 
-  const subtitles = [];
-  const shotOutputs = [];
-  const segmentPaths = [];
-  let cursor = 0;
-
-  for (let index = 0; index < shots.length; index += 1) {
-    const shot = shots[index];
-    await reportProgress(onProgress, `正在生成镜头 ${index + 1}/${shots.length}`, {
+  for (let index = 0; index < workbench.shots.length; index += 1) {
+    const shot = workbench.shots[index];
+    await reportProgress(onProgress, `正在处理镜头 ${index + 1}/${workbench.shots.length}`, {
       current: index + 1,
-      total: shots.length,
-      shotId: shot.shot_id || `shot_${String(index + 1).padStart(2, "0")}`,
+      total: workbench.shots.length,
+      shotId: shot.shot_id,
     });
-    const shotId = shot.shot_id || `shot_${String(index + 1).padStart(2, "0")}`;
-    const prompt = buildFinalImagePrompt(shot, characters, storyboard.style_guide);
-    const imageBase = path.join(paths.dirs.images, shotId);
-    const audioPath = path.join(paths.dirs.audio, `${shotId}.mp3`);
-    const segmentPath = path.join(paths.dirs.video, `${shotId}.mp4`);
-    let imagePath = `${imageBase}.png`;
-    const imageStatus = "ok";
-    const audioStatus = "ok";
-
-    await writeText(path.join(paths.dirs.images, `${shotId}.prompt.txt`), prompt);
-
-    const imageResult = manifest.logger
-      ? await manifest.logger.measure(
-          {
-            event: "ai",
-            step: `shot_image:${shotId}`,
-            model: project.models.shotImage,
-            provider: "image",
-          },
-          () => client.generateImage({
-            model: project.models.shotImage,
-            prompt,
-          }),
-        )
-      : await client.generateImage({
-          model: project.models.shotImage,
-          prompt,
-        });
-    await fs.writeFile(imagePath, imageResult.buffer);
-    await writeJson(path.join(paths.dirs.images, `${shotId}.meta.json`), {
-      model: project.models.shotImage,
-      usage: imageResult.usage || null,
-      status: "ok",
+    const projectDetail = await readProjectDetail(project.id);
+    await generateMediaShotImageInternal({
+      project,
+      projectDetail,
+      client,
+      paths,
+      manifest,
+      shotId: shot.shot_id,
     });
-
-    let durationSec = Number(shot.duration_sec || 5);
-    const ttsResult = manifest.logger
-      ? await manifest.logger.measure(
-          {
-            event: "ai",
-            step: `tts:${shotId}`,
-            model: resolveVoice(shot.speaker, characters),
-            provider: "tts",
-          },
-          () => client.synthesizeSpeech({
-            text: shot.line || shot.subtitle,
-            voiceType: resolveVoice(shot.speaker, characters),
-          }),
-        )
-      : await client.synthesizeSpeech({
-          text: shot.line || shot.subtitle,
-          voiceType: resolveVoice(shot.speaker, characters),
-        });
-    await fs.writeFile(audioPath, ttsResult.buffer);
-    durationSec = Math.max(durationSec, (ttsResult.durationMs || 0) / 1000 + 0.35);
-    await writeJson(path.join(paths.dirs.audio, `${shotId}.meta.json`), {
-      voiceType: resolveVoice(shot.speaker, characters),
-      durationMs: ttsResult.durationMs,
-      reqid: ttsResult.reqid,
-      status: "ok",
-    });
-
-    await renderSegment({
-      imagePath,
-      audioPath,
-      outputPath: segmentPath,
-      durationSec,
-    });
-
-    subtitles.push([
-      String(index + 1),
-      `${secondsToSrtTime(cursor)} --> ${secondsToSrtTime(cursor + durationSec)}`,
-      shot.subtitle || shot.line,
-      "",
-    ].join("\n"));
-
-    cursor += durationSec;
-    segmentPaths.push(segmentPath);
-    shotOutputs.push({
-      shotId,
-      speaker: shot.speaker,
-      durationSec,
-      imageStatus,
-      audioStatus,
-      imagePath: path.relative(paths.outputDir, imagePath),
-      audioPath: path.relative(paths.outputDir, audioPath),
-      segmentPath: path.relative(paths.outputDir, segmentPath),
-      subtitle: shot.subtitle || shot.line,
-      videoPrompt: shot.video_prompt || shot.image_prompt,
+    await generateMediaShotAudioInternal({
+      project,
+      client,
+      paths,
+      manifest,
+      shotId: shot.shot_id,
     });
   }
-
-  const subtitlesPath = path.join(paths.dirs.subtitles, "subtitles.srt");
-  const concatListPath = path.join(paths.dirs.video, "segments.txt");
-  await writeText(subtitlesPath, subtitles.join("\n"));
-  await writeText(
-    concatListPath,
-    segmentPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
-  );
-
-  if (config.qiniu.compareModels.image.length) {
-    const comparisonDir = path.join(paths.outputDir, "comparisons", "image");
-    await ensureDir(comparisonDir);
-    const firstShot = shots[0];
-    const prompt = buildFinalImagePrompt(firstShot, characters, storyboard.style_guide);
-    for (const model of config.qiniu.compareModels.image) {
-      try {
-        const image = await client.generateImage({ model, prompt });
-        await fs.writeFile(path.join(comparisonDir, `${model.replaceAll("/", "__")}.png`), image.buffer);
-        await writeJson(path.join(comparisonDir, `${model.replaceAll("/", "__")}.meta.json`), {
-          model,
-          usage: image.usage || null,
-        });
-      } catch (error) {
-        await writeJson(path.join(comparisonDir, `${model.replaceAll("/", "__")}.error.json`), {
-          model,
-          message: error.message,
-        });
-      }
-    }
-  }
-
-  manifest.shots = shotOutputs;
   manifest.outputs.subtitles = "08-subtitles/subtitles.srt";
   upsertStageRecord(manifest, "media", project.models.shotImage, "06-images + 07-audio + 08-subtitles");
 }
 
 async function executeOutput(project, paths, manifest, onProgress) {
   await reportProgress(onProgress, "正在合成静态成片");
+  const workbench = await readMediaWorkbench(project.id);
+  if (!workbench?.shots?.length) {
+    throw new Error("当前没有可用于合成的镜头。");
+  }
+
   const subtitlesPath = path.join(paths.dirs.subtitles, "subtitles.srt");
   const concatListPath = path.join(paths.dirs.video, "segments.txt");
   const roughVideoPath = path.join(paths.dirs.video, "rough-output.mp4");
   const outputVideoPath = path.join(paths.dirs.video, "output.mp4");
 
+  const subtitles = [];
+  const segmentPaths = [];
+  let cursor = 0;
+
+  for (let index = 0; index < workbench.shots.length; index += 1) {
+    const shot = workbench.shots[index];
+    await reportProgress(onProgress, `正在合成镜头 ${index + 1}/${workbench.shots.length}`, {
+      current: index + 1,
+      total: workbench.shots.length,
+      shotId: shot.shot_id,
+    });
+    const segmentRelativePath = await renderStaticSegmentForShot(paths, shot);
+    const durationSec = Number(shot.duration_sec || 4);
+    segmentPaths.push(path.join(paths.outputDir, segmentRelativePath));
+    subtitles.push([
+      String(index + 1),
+      `${secondsToSrtTime(cursor)} --> ${secondsToSrtTime(cursor + durationSec)}`,
+      shot.dialogue || shot.audio_config?.text || "",
+      "",
+    ].join("\n"));
+    cursor += durationSec;
+  }
+
+  await writeText(subtitlesPath, subtitles.join("\n"));
+  await writeText(
+    concatListPath,
+    segmentPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
+  );
   await concatSegments(concatListPath, roughVideoPath);
   await burnSubtitles(roughVideoPath, subtitlesPath, outputVideoPath);
   manifest.outputs.outputVideo = "09-video/output.mp4";
@@ -902,78 +1136,38 @@ async function pollVideoResult(client, model, provider, id) {
 }
 
 async function executeVideo(project, client, paths, manifest, onProgress) {
-  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
-  if (!storyboard?.shots?.length) {
-    throw new Error("请先完成分镜阶段。");
+  const workbench = await readMediaWorkbench(project.id);
+  if (!workbench?.shots?.length) {
+    throw new Error("请先完成故事板阶段，确保已有镜头。");
   }
-
-  const shotOutputs = manifest.shots || [];
-  if (!shotOutputs.length) {
-    throw new Error("请先完成画面与配音阶段，确保已有镜头素材。");
-  }
-
   const renderedVideoPaths = [];
-  for (let index = 0; index < shotOutputs.length; index += 1) {
-    const shotOutput = shotOutputs[index];
-    const storyboardShot = storyboard.shots[index] || {};
-    const imagePath = path.join(paths.outputDir, shotOutput.imagePath);
-    const localExt = path.extname(imagePath).toLowerCase();
-    const imageBuffer = [".png", ".jpg", ".jpeg"].includes(localExt)
-      ? await fs.readFile(imagePath)
-      : null;
-    const prompt = storyboardShot.video_prompt || shotOutput.videoPrompt || storyboardShot.image_prompt || storyboardShot.title || "真人表演视频镜头";
-    await reportProgress(onProgress, `正在生成视频镜头 ${index + 1}/${shotOutputs.length}`, {
-      current: index + 1,
-      total: shotOutputs.length,
-      shotId: shotOutput.shotId,
-    });
-    const task = manifest.logger
-      ? await manifest.logger.measure(
-          {
-            event: "ai",
-            step: `video_task:${shotOutput.shotId}`,
-            model: project.models.shotVideo,
-            provider: "video",
-          },
-          () => client.createVideoTask({
-            model: project.models.shotVideo,
-            prompt,
-            imageBuffer,
-            seconds: Number(shotOutput.durationSec || storyboardShot.duration_sec || 5),
-          }),
-        )
-      : await client.createVideoTask({
-          model: project.models.shotVideo,
-          prompt,
-          imageBuffer,
-          seconds: Number(shotOutput.durationSec || storyboardShot.duration_sec || 5),
-        });
-    const downloadUrl = manifest.logger
-      ? await manifest.logger.measure(
-          {
-            event: "ai",
-            step: `video_poll:${shotOutput.shotId}`,
-            model: project.models.shotVideo,
-            provider: task.provider,
-          },
-          () => pollVideoResult(client, project.models.shotVideo, task.provider, task.id),
-        )
-      : await pollVideoResult(client, project.models.shotVideo, task.provider, task.id);
-    const response = await fetch(downloadUrl);
-    if (!response.ok) {
-      throw new Error(`下载视频失败: ${response.status}`);
+  for (let index = 0; index < workbench.shots.length; index += 1) {
+    const shot = workbench.shots[index];
+    const { selectedFrame } = extractSelectedShotMedia(shot);
+    if (!selectedFrame?.path) {
+      throw new Error(`镜头 ${shot.shot_id} 缺少首帧素材，无法批量生成视频。`);
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const outputPath = path.join(paths.dirs.videoModel, `${shotOutput.shotId}.mp4`);
-    await fs.writeFile(outputPath, buffer);
-    renderedVideoPaths.push(outputPath);
-    await writeJson(path.join(paths.dirs.videoModel, `${shotOutput.shotId}.meta.json`), {
-      model: project.models.shotVideo,
-      taskId: task.id,
-      provider: task.provider,
-      prompt,
-      downloadUrl,
+    await reportProgress(onProgress, `正在生成视频镜头 ${index + 1}/${workbench.shots.length}`, {
+      current: index + 1,
+      total: workbench.shots.length,
+      shotId: shot.shot_id,
     });
+    await generateMediaShotVideoInternal({
+      project,
+      projectDetail: await readProjectDetail(project.id),
+      client,
+      paths,
+      manifest,
+      shotId: shot.shot_id,
+      videoOptions: shot.video_options || {},
+    });
+    const nextWorkbench = await readMediaWorkbench(project.id);
+    const nextShot = nextWorkbench.shots.find((item) => item.shot_id === shot.shot_id);
+    const { selectedVideo } = extractSelectedShotMedia(nextShot || {});
+    if (!selectedVideo?.path) {
+      throw new Error(`镜头 ${shot.shot_id} 视频生成后未找到结果文件。`);
+    }
+    renderedVideoPaths.push(path.join(paths.outputDir, selectedVideo.path));
   }
 
   const finalVideoPath = path.join(paths.dirs.videoModel, "output.mp4");
@@ -997,6 +1191,47 @@ async function executeVideo(project, client, paths, manifest, onProgress) {
     },
   };
   upsertStageRecord(manifest, "video", project.models.shotVideo, "10-video-model/output.mp4");
+}
+
+export async function generateMediaShotImage(projectId, shotId) {
+  const project = await readProject(projectId);
+  const projectDetail = await readProjectDetail(projectId);
+  const paths = await ensureProjectWorkspace(projectId);
+  const client = new QiniuMaaSClient(config.qiniu);
+  const manifest = await loadManifest(projectId, project);
+  return generateMediaShotImageInternal({ project, projectDetail, client, paths, manifest, shotId });
+}
+
+export async function generateMediaShotAudio(projectId, shotId, options = {}) {
+  const project = await readProject(projectId);
+  const paths = await ensureProjectWorkspace(projectId);
+  const client = new QiniuMaaSClient(config.qiniu);
+  const manifest = await loadManifest(projectId, project);
+  return generateMediaShotAudioInternal({
+    project,
+    client,
+    paths,
+    manifest,
+    shotId,
+    previewOnly: Boolean(options.previewOnly),
+  });
+}
+
+export async function generateMediaShotVideo(projectId, shotId, options = {}) {
+  const project = await readProject(projectId);
+  const projectDetail = await readProjectDetail(projectId);
+  const paths = await ensureProjectWorkspace(projectId);
+  const client = new QiniuMaaSClient(config.qiniu);
+  const manifest = await loadManifest(projectId, project);
+  return generateMediaShotVideoInternal({
+    project,
+    projectDetail,
+    client,
+    paths,
+    manifest,
+    shotId,
+    videoOptions: options,
+  });
 }
 
 export async function regenerateSubjectReference(projectId, { kind, key }) {
