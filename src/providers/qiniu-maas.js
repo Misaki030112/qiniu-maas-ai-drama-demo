@@ -161,12 +161,21 @@ export class QiniuMaaSClient {
           mimeType: "image/png",
         };
       }
+      const parameters = {
+        durationSeconds: Math.max(4, Math.min(8, Math.round(seconds))),
+        sampleCount: 1,
+        generateAudio: Boolean(enableAudio),
+      };
+      if (resolution) {
+        parameters.resolution = resolution;
+      }
       const response = await fetch(`${this.baseUrl}/videos/generations`, {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify({
           model,
           instances: [instance],
+          parameters,
         }),
       });
       const payload = await response.json();

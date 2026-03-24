@@ -58,11 +58,15 @@ export function buildVideoTaskBody({
   const body = {
     model,
     prompt,
-    seconds: normalizeVideoSeconds(model, seconds),
+    seconds: String(normalizeVideoSeconds(model, seconds)),
     size: resolution || resolveVideoSize(aspectRatio),
   };
 
   if (imageBuffer || lastFrameBuffer || referenceImages.length) {
+    if (model.startsWith("sora-")) {
+      throw new Error("Sora 图生视频需要公网可访问的参考图 URL，当前项目尚未接入该上传链路。");
+    }
+
     if (model.startsWith("kling-")) {
       const imageList = [
         imageBuffer ? toImageListEntry(imageBuffer, "first_frame") : null,
@@ -85,13 +89,10 @@ export function buildVideoTaskBody({
       return body;
     }
 
-    if (model.startsWith("sora-")) {
-      throw new Error("Sora 图生视频当前需要公开可访问的参考图 URL，当前项目暂未接入该上传链路。");
-    }
     if (model.startsWith("vidu")) {
       throw new Error("Vidu 图生视频参数暂未按官方文档接入，请先使用 Kling 或 Veo。");
     }
-  } else if (["kling-v2-1", "kling-v2-5-turbo", "kling-video-o1"].includes(model)) {
+  } else if (["kling-v2-1", "kling-v2-5-turbo"].includes(model)) {
     throw new Error(`${model} 仅支持图生视频，请先提供首帧或参考图。`);
   }
 
@@ -107,7 +108,8 @@ export function parseVideoTaskResult({ provider, payload }) {
       null;
     return {
       status: payload.state || payload.status,
-      url: sample?.video?.uri || sample?.uri || "",
+      url: sample?.video?.uri || sample?.uri || sample?.url || "",
+      errorMessage: payload?.error?.message || "",
       raw: payload,
     };
   }
@@ -121,6 +123,7 @@ export function parseVideoTaskResult({ provider, payload }) {
   return {
     status: payload.status,
     url: video?.url || video?.uri || "",
+    errorMessage: payload?.error?.message || payload?.task_result?.error?.message || "",
     raw: payload,
   };
 }

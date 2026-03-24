@@ -591,8 +591,22 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     const ref = (shot.reference_images || []).find((item) => `ref:${item.id || item.path}` === selectedId || item.id === selectedId);
     return ref?.path || "";
   })();
-  const firstFrame = capability.supports_first_frame && videoOptions.useFirstFrame !== false && selectedFrame?.path
-    ? await fs.readFile(path.join(paths.outputDir, selectedFrame.path))
+  const resolvedFirstFramePath = (() => {
+    if (!capability.supports_first_frame || videoOptions.useFirstFrame === false) {
+      return "";
+    }
+    if (selectedFrame?.path) {
+      return selectedFrame.path;
+    }
+    const firstReferencePath = shot.reference_images?.[0]?.path || "";
+    if (firstReferencePath) {
+      return firstReferencePath;
+    }
+    const firstSubjectReference = findSubjectReferenceAssets(projectDetail, shot.subject_refs || [])[0];
+    return firstSubjectReference?.imagePath || firstSubjectReference?.path || "";
+  })();
+  const firstFrame = resolvedFirstFramePath
+    ? await fs.readFile(path.join(paths.outputDir, resolvedFirstFramePath))
     : null;
   const tailFrame = capability.supports_last_frame && resolvedTailFramePath
     ? await fs.readFile(path.join(paths.outputDir, resolvedTailFramePath))
@@ -1129,7 +1143,7 @@ async function pollVideoResult(client, model, provider, id) {
       return result.url;
     }
     if (["failed", "error", "cancelled"].includes(status)) {
-      throw new Error(`视频任务失败: ${status}`);
+      throw new Error(`视频任务失败: ${result.errorMessage || status}`);
     }
     await sleep(5000);
   }
