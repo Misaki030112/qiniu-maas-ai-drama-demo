@@ -139,8 +139,32 @@ function buildFrameChoiceOptions(shot) {
   ];
 }
 
+function buildFirstFrameChoiceOptions(shot) {
+  return [
+    { value: "", label: "默认使用当前静帧" },
+    ...(shot.frame_assets || []).map((item, index) => ({
+      value: item.id,
+      label: `静帧 ${index + 1}`,
+      path: item.path,
+    })),
+    ...(shot.reference_images || []).map((item, index) => ({
+      value: `ref:${item.id || item.path || index}`,
+      label: `参考图 ${index + 1}`,
+      path: item.path,
+    })),
+  ];
+}
+
+function resolveFrameOptionValueByPath(options, targetPath) {
+  if (!targetPath) {
+    return "";
+  }
+  return options.find((option) => option.path === targetPath)?.value || "";
+}
+
 function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel }) {
   const frameOptions = buildFrameChoiceOptions(shot);
+  const firstFrameOptions = buildFirstFrameChoiceOptions(shot);
   const storyboardDuration = Number(shot.duration_sec || 4);
   const effectiveAutoDuration = normalizeVideoSeconds(currentVideoModel, storyboardDuration);
 
@@ -230,14 +254,30 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel
       ) : null}
 
       {capabilities.supports_first_frame ? (
-        <div className="studio-field">
+        <label className="studio-field">
           <span>首帧图</span>
+          <select
+            value={resolveFrameOptionValueByPath(firstFrameOptions, shot.video_options?.firstFramePath || "")}
+            onChange={(event) => {
+              const option = firstFrameOptions.find((item) => item.value === event.target.value);
+              onPatch({
+                video_options: {
+                  ...(shot.video_options || {}),
+                  useFirstFrame: true,
+                  firstFramePath: option?.path || "",
+                  firstFrameLabel: option?.value ? option.label : "",
+                },
+              });
+            }}
+          >
+            {firstFrameOptions.map((option) => <option key={option.value || "auto"} value={option.value}>{option.label}</option>)}
+          </select>
           <div className="studio-inline-note">
             {shot.video_options?.firstFrameLabel
               ? `当前首帧：${shot.video_options.firstFrameLabel}`
               : "默认使用当前选中的静帧作为首帧。"}
           </div>
-        </div>
+        </label>
       ) : null}
 
       {capabilities.supports_last_frame ? (
