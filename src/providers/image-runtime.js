@@ -137,9 +137,12 @@ export function buildImageRequest({ model, prompt, aspectRatio = "16:9", referen
       endpoint: "/images/edits",
       body: {
         model,
+        image: "",
         prompt,
         aspect_ratio: aspectRatio,
-        ...(subjectImages.length ? { subject_image_list: subjectImages } : {}),
+        ...(subjectImages.length
+          ? { subject_image_list: subjectImages.map((subject_image) => ({ subject_image })) }
+          : {}),
         ...(sceneImage ? { scene_image: sceneImage } : {}),
         ...(styleImage ? { style_image: styleImage } : {}),
       },
