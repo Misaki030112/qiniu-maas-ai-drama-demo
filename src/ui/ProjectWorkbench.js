@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { MediaWorkbenchPanel } from "./MediaWorkbenchPanel.js";
+import { getVoiceCatalog } from "../voice-catalog.js";
 
 const tabs = [
   { id: "script", label: "剧本", stage: "adaptation" },
@@ -64,6 +65,7 @@ const ratioOptions = [
   { value: "3:4", icon: "poster" },
 ];
 const styleOptions = ["写实", "写实电影", "都市职场", "冷灰质感", "高压夜战"];
+const voiceOptions = getVoiceCatalog();
 
 const emptyStoryboardDraft = {
   style_guide: {},
@@ -195,6 +197,7 @@ function createEmptyStoryboardItem(groupIndex, itemIndex) {
     dialogue: "",
     duration_sec: 4,
     speaker: "",
+    subject_refs: [],
     image_prompt: "",
     video_prompt: "",
     negative_prompt: "",
@@ -236,6 +239,7 @@ function normalizeImportedStoryboard(payload) {
         visual_focus: item.shot_description,
         transition: "",
         speaker: item.speaker || "旁白",
+        subject_refs: item.subject_refs || [],
         line: item.dialogue || "",
         subtitle: item.dialogue || "",
         duration_sec: Number(item.duration_sec || 4),
@@ -263,6 +267,7 @@ function buildStoryboardRows(storyboard) {
       sound_fx: item.sound_fx || "",
       dialogue: item.dialogue || "",
       speaker: item.speaker || "",
+      subject_refs: (item.subject_refs || []).map((ref) => `${ref.kind}:${ref.key}`).join(" | "),
       duration_sec: item.duration_sec || 4,
       image_prompt: item.image_prompt || "",
       video_prompt: item.video_prompt || "",
@@ -285,6 +290,7 @@ function serializeStoryboardCsv(storyboard) {
     ["音效", "sound_fx"],
     ["对白", "dialogue"],
     ["说话人", "speaker"],
+    ["关联主体", "subject_refs"],
     ["时长", "duration_sec"],
     ["静帧提示词", "image_prompt"],
     ["视频提示词", "video_prompt"],
@@ -319,6 +325,7 @@ function storyboardFromCsv(text) {
     音效: "sound_fx",
     对白: "dialogue",
     说话人: "speaker",
+    关联主体: "subject_refs",
     时长: "duration_sec",
     静帧提示词: "image_prompt",
     视频提示词: "video_prompt",
@@ -360,6 +367,15 @@ function storyboardFromCsv(text) {
       sound_fx: record.sound_fx || "",
       dialogue: record.dialogue || "",
       speaker: record.speaker || "",
+      subject_refs: String(record.subject_refs || "")
+        .split("|")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => {
+          const [kind, ...rest] = item.split(":");
+          return { kind: (kind || "").trim(), key: rest.join(":").trim() };
+        })
+        .filter((item) => item.kind && item.key),
       duration_sec: Number(record.duration_sec || 4),
       image_prompt: record.image_prompt || "",
       video_prompt: record.video_prompt || "",
@@ -1074,6 +1090,18 @@ function buildNewSubject(kind, index) {
       continuity_prompt: "",
       appearance: "",
       voice_style: "",
+      voice_profile: {
+        label: "高冷御姐",
+        voiceType: "qiniu_zh_female_wwxkjx",
+        ageGroup: "adult",
+        sceneTags: ["都市", "对白"],
+        styleTags: ["高冷", "干练"],
+        supportsEmotion: true,
+        emotion: "",
+        speedRatio: 1,
+        volume: 5,
+        pitch: 1,
+      },
     };
   }
   if (kind === "scene") {
@@ -2206,10 +2234,40 @@ export function ProjectWorkbench({ projectId }) {
                       <input value={currentSubject.name || ""} onChange={(event) => updateCurrentSubject("name", event.target.value)} />
                     </label>
                     {subjectKind === "character" ? (
-                      <label className="studio-field">
-                        <span>角色定位</span>
-                        <input value={currentSubject.role || ""} onChange={(event) => updateCurrentSubject("role", event.target.value)} />
-                      </label>
+                      <>
+                        <label className="studio-field">
+                          <span>角色定位</span>
+                          <input value={currentSubject.role || ""} onChange={(event) => updateCurrentSubject("role", event.target.value)} />
+                        </label>
+                        <label className="studio-field">
+                          <span>声音气质</span>
+                          <input value={currentSubject.voice_style || ""} onChange={(event) => updateCurrentSubject("voice_style", event.target.value)} />
+                        </label>
+                        <label className="studio-field">
+                          <span>默认音色</span>
+                          <select
+                            value={currentSubject.voice_profile?.label || ""}
+                            onChange={(event) => {
+                              const preset = voiceOptions.find((item) => item.label === event.target.value) || voiceOptions[0];
+                              updateCurrentSubject("voice_profile", {
+                                ...(currentSubject.voice_profile || {}),
+                                label: preset?.label || "",
+                                voiceType: preset?.voiceType || "",
+                                ageGroup: preset?.ageGroup || currentSubject.voice_profile?.ageGroup || "adult",
+                                sceneTags: preset?.sceneTags || currentSubject.voice_profile?.sceneTags || [],
+                                styleTags: preset?.styleTags || currentSubject.voice_profile?.styleTags || [],
+                                supportsEmotion: preset?.supportsEmotion ?? true,
+                                emotion: currentSubject.voice_profile?.emotion || "",
+                                speedRatio: Number(currentSubject.voice_profile?.speedRatio || 1),
+                                volume: Number(currentSubject.voice_profile?.volume || 5),
+                                pitch: Number(currentSubject.voice_profile?.pitch || 1),
+                              });
+                            }}
+                          >
+                            {voiceOptions.map((item) => <option key={item.key} value={item.label}>{item.label}</option>)}
+                          </select>
+                        </label>
+                      </>
                     ) : null}
                     {subjectKind === "scene" ? (
                       <label className="studio-field">

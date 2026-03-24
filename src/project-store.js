@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { databaseSchema, query } from "./db.js";
 import { mapMediaWorkbenchUrls, normalizeMediaWorkbench } from "./media-workbench.js";
+import { normalizeVoiceProfile } from "./voice-catalog.js";
 import { ensureDir, makeRunId, readJson, readText, writeJson, writeText } from "./utils.js";
 
 export const stageOrder = [
@@ -144,7 +145,13 @@ function mapReferenceImages(projectId, items = []) {
 export function normalizeCharacterStagePayload(payload, adaptation = null) {
   const source = payload && typeof payload === "object" ? payload : {};
   return {
-    characters: Array.isArray(source.characters) ? source.characters : [],
+    characters: Array.isArray(source.characters)
+      ? source.characters.map((item) => ({
+          ...item,
+          voice_style: item?.voice_style || "",
+          voice_profile: normalizeVoiceProfile(item?.voice_profile, item?.gender, item?.name),
+        }))
+      : [],
     scenes: Array.isArray(source.scenes) && source.scenes.length
       ? source.scenes
       : deriveScenesFromAdaptation(adaptation),
@@ -170,6 +177,11 @@ function normalizeStoryboardItem(item, groupIndex, itemIndex) {
     dialogue: item?.dialogue || item?.line || item?.subtitle || "",
     duration_sec: Number(item?.duration_sec || item?.duration || 4),
     speaker: item?.speaker || "",
+    subject_refs: Array.isArray(item?.subject_refs)
+      ? item.subject_refs
+          .filter((ref) => ref?.kind && ref?.key)
+          .map((ref) => ({ kind: ref.kind, key: ref.key }))
+      : [],
     image_prompt: item?.image_prompt || "",
     video_prompt: item?.video_prompt || "",
     negative_prompt: item?.negative_prompt || "",
@@ -238,6 +250,7 @@ export function normalizeStoryboardPayload(payload, adaptation = null) {
         visual_focus: item.shot_description,
         transition: "",
         speaker: item.speaker || "旁白",
+        subject_refs: item.subject_refs || [],
         line: item.dialogue || "",
         subtitle: item.dialogue || "",
         duration_sec: Number(item.duration_sec || 4),

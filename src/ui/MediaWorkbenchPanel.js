@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getVideoCapabilities } from "../video-capabilities.js";
+import { findVoicePresetByLabel, findVoicePresetByType, getVoiceCatalog } from "../voice-catalog.js";
 
 const inspectorTabs = [
   { id: "image", label: "绘图" },
@@ -9,11 +10,7 @@ const inspectorTabs = [
   { id: "audio", label: "台词与配音" },
 ];
 
-const builtinVoices = [
-  { value: "qiniu_zh_female_ljfdxx", label: "旁白女声" },
-  { value: "qiniu_zh_female_wwxkjx", label: "角色女声" },
-  { value: "qiniu_zh_male_whxkxg", label: "角色男声" },
-];
+const builtinVoices = getVoiceCatalog();
 
 function findSelectedAsset(items = [], selectedId = "") {
   return items.find((item) => item.id === selectedId) || items[0] || null;
@@ -299,15 +296,38 @@ export function MediaWorkbenchPanel({
   }, [audioPreviewUrl]);
 
   const currentShot = shots.find((item) => item.shot_id === selectedShotId) || null;
+  const characterLibrary = project?.artifacts?.characters?.characters || [];
   const currentFrame = currentShot ? findSelectedAsset(currentShot.frame_assets, currentShot.selected_frame_asset_id) : null;
   const currentVideo = currentShot ? findSelectedAsset(currentShot.video_assets, currentShot.selected_video_asset_id) : null;
   const capabilities = getVideoCapabilities(models.shotVideo || "");
+  const currentSpeakerCharacter = useMemo(
+    () => characterLibrary.find((item) => item.name === (currentShot?.audio_config?.speaker || currentShot?.speaker || "")) || null,
+    [characterLibrary, currentShot],
+  );
+  const currentVoicePreset = findVoicePresetByType(currentShot?.audio_config?.voiceType) || findVoicePresetByLabel(currentShot?.audio_config?.voiceLabel);
 
   function patchCurrentShot(patch) {
     if (!currentShot) {
       return;
     }
     onPatchShot(currentShot.shot_id, patch);
+  }
+
+  function applyVoicePreset(preset) {
+    if (!preset || !currentShot) {
+      return;
+    }
+    patchCurrentShot({
+      audio_config: {
+        ...(currentShot.audio_config || {}),
+        voiceType: preset.voiceType,
+        voiceLabel: preset.label,
+        speedRatio: Number(currentShot.audio_config?.speedRatio || preset.speedRatio || 1),
+        volume: Number(currentShot.audio_config?.volume || preset.volume || 5),
+        pitch: Number(currentShot.audio_config?.pitch || preset.pitch || 1),
+        emotion: currentShot.audio_config?.emotion || preset.emotion || "",
+      },
+    });
   }
 
   function toggleSubjectRef(item) {
@@ -532,10 +552,36 @@ export function MediaWorkbenchPanel({
               <select
                 value={currentShot.audio_config?.speaker || currentShot.speaker || "旁白"}
                 onChange={(event) => patchCurrentShot({
-                  audio_config: {
-                    ...(currentShot.audio_config || {}),
-                    speaker: event.target.value,
-                  },
+                  audio_config: (() => {
+                    const speaker = event.target.value;
+                    const matchedCharacter = characterLibrary.find((item) => item.name === speaker);
+                    const matchedPreset =
+                      findVoicePresetByType(matchedCharacter?.voice_profile?.voiceType) ||
+                      findVoicePresetByLabel(matchedCharacter?.voice_profile?.label) ||
+                      currentVoicePreset ||
+                      builtinVoices[0];
+                    return {
+                      ...(currentShot.audio_config || {}),
+                      speaker,
+                      voiceType: matchedPreset?.voiceType || currentShot.audio_config?.voiceType || builtinVoices[0].voiceType,
+                      voiceLabel: matchedPreset?.label || currentShot.audio_config?.voiceLabel || builtinVoices[0].label,
+                      speedRatio: Number(matchedCharacter?.voice_profile?.speedRatio || currentShot.audio_config?.speedRatio || 1),
+                      volume: Number(matchedCharacter?.voice_profile?.volume || currentShot.audio_config?.volume || 5),
+                      pitch: Number(matchedCharacter?.voice_profile?.pitch || currentShot.audio_config?.pitch || 1),
+                      emotion: matchedCharacter?.voice_profile?.emotion || currentShot.audio_config?.emotion || "",
+                    };
+                  })(),
+                  subject_refs: (() => {
+                    const speaker = event.target.value;
+                    if (!speaker || speaker === "旁白") {
+                      return currentShot.subject_refs || [];
+                    }
+                    const refs = currentShot.subject_refs || [];
+                    if (refs.some((item) => item.kind === "character" && item.key === speaker)) {
+                      return refs;
+                    }
+                    return [...refs, { kind: "character", key: speaker }];
+                  })(),
                 })}
               >
                 <option value="旁白">空镜 / 旁白</option>
@@ -547,17 +593,34 @@ export function MediaWorkbenchPanel({
             <label className="studio-field">
               <span>配音</span>
               <select
-                value={currentShot.audio_config?.voiceType || builtinVoices[0].value}
+                value={currentShot.audio_config?.voiceLabel || currentVoicePreset?.label || builtinVoices[0].label}
                 onChange={(event) => patchCurrentShot({
-                  audio_config: {
-                    ...(currentShot.audio_config || {}),
-                    voiceType: event.target.value,
-                  },
+                  audio_config: (() => {
+                    const preset = findVoicePresetByLabel(event.target.value) || builtinVoices[0];
+                    return {
+                      ...(currentShot.audio_config || {}),
+                      voiceType: preset.voiceType,
+                      voiceLabel: preset.label,
+                    };
+                  })(),
                 })}
               >
-                {builtinVoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                {builtinVoices.map((item) => <option key={item.key} value={item.label}>{item.label}</option>)}
               </select>
             </label>
+            {currentSpeakerCharacter?.voice_profile?.label ? (
+              <div className="studio-inline-note">
+                角色默认音色：{currentSpeakerCharacter.voice_profile.label}
+                {currentSpeakerCharacter.voice_style ? `，声音气质：${currentSpeakerCharacter.voice_style}` : ""}
+                <button
+                  type="button"
+                  className="studio-inline-link"
+                  onClick={() => applyVoicePreset(currentSpeakerCharacter.voice_profile)}
+                >
+                  应用角色默认音色
+                </button>
+              </div>
+            ) : null}
             <label className="studio-field">
               <span>语速</span>
               <input

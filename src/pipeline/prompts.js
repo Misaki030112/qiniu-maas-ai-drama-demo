@@ -1,3 +1,5 @@
+import { getVoiceCatalog } from "../voice-catalog.js";
+
 export function buildAdaptationMessages(storyText, settings = {}) {
   const ratio = settings.scriptRatio || settings.videoRatio || "9:16";
   const style = settings.scriptStyle || settings.stylePreset || "写实";
@@ -61,6 +63,9 @@ ${storyText}
 export function buildCharacterMessages(adaptation, settings = {}) {
   const style = settings.scriptStyle || settings.stylePreset || adaptation?.style_preset || "写实";
   const ratio = settings.scriptRatio || settings.videoRatio || adaptation?.video_ratio || "9:16";
+  const voiceCatalog = getVoiceCatalog()
+    .map((item) => `${item.label}（voiceType=${item.voiceType}；适合=${item.sceneTags.join("/") || "通用"}；气质=${item.styleTags.join("/") || "通用"}）`)
+    .join("\n");
   return {
     system: [
       "你是人物设定导演兼连续性设计师。",
@@ -87,6 +92,10 @@ export function buildCharacterMessages(adaptation, settings = {}) {
 10. 若剧本本身偏古风、幻想、悬疑、末日、喜剧、医疗、校园等题材，你必须跟着题材走，不得自行拉回都市职场。
 11. subject_hints.characters 只是辅助线索，不代表最终角色名；最终角色名必须以剧本正文出现的人名为准。
 12. 所有主体参考图都必须是纯画面设计稿，禁止出现任何文字、数字、字母、标题、标签、批注、说明、对白、UI 截图、水印、logo、品牌字样、海报排版元素。
+13. 每个角色都必须给出结构化 voice_profile，用于后续默认配音。voice_profile 必须从给定音色目录中选择一个最贴合角色气质和年龄的音色，不能自造音色名。
+
+可选音色目录（必须精确使用其中的 label 和 voiceType）：
+${voiceCatalog}
 
 角色 full_description 的推荐结构：
 - 开头先定总质感：例如 8K画质、真实材质、超写实、电影级摄影。
@@ -124,7 +133,19 @@ export function buildCharacterMessages(adaptation, settings = {}) {
       "reference_prompt": "用于生成角色参考图的提示词",
       "continuity_prompt": "给后续分镜、画面、视频模型的人物一致性提示语，中文，写实真人风格",
       "negative_prompt": "必须避免的偏差，例如卡通脸、古装、年龄漂移、服装漂移",
-      "voice_style": "更适合什么声音气质"
+      "voice_style": "更适合什么声音气质",
+      "voice_profile": {
+        "label": "从给定音色目录中选择的音色名",
+        "voiceType": "与音色目录严格一致的 voiceType",
+        "ageGroup": "young_adult|adult|mature",
+        "sceneTags": ["适用场景1", "场景2"],
+        "styleTags": ["声音气质1", "气质2"],
+        "supportsEmotion": true,
+        "emotion": "默认情绪，没有则空字符串",
+        "speedRatio": 1,
+        "volume": 5,
+        "pitch": 1
+      }
     }
   ],
   "scenes": [
@@ -179,6 +200,8 @@ export function buildStoryboardMessages(adaptation, characters, settings = {}) {
 8. image_prompt 偏静帧生成，video_prompt 偏连续动作生成。
 9. 如果镜头里有人物动作，必须写清楚动作起点和动作终点。
 10. 每条分镜行必须尽量填完整：场景、景别、构图、运镜、光影、分镜描述、音效、对白、时长。
+11. 每条分镜行必须显式给出 subject_refs，列出这条镜头会用到的角色/场景/道具。后续进入故事板时，这些主体要默认被选中。
+12. 如果镜头里有人物对白，speaker 必须填写角色名，并尽量让 subject_refs 中包含该角色。
 
 返回 JSON：
 {
@@ -205,6 +228,12 @@ export function buildStoryboardMessages(adaptation, characters, settings = {}) {
           "sound_fx": "环境音或音效",
           "dialogue": "这一条分镜的对白，没有就写空字符串",
           "speaker": "说话人，没有就写旁白或空字符串",
+          "subject_refs": [
+            {
+              "kind": "character|scene|prop",
+              "key": "必须与角色设定/场景设定/道具设定中的 name 完全一致"
+            }
+          ],
           "duration_sec": 4,
           "image_prompt": "完整中文静帧提示词",
           "video_prompt": "完整中文视频提示词",

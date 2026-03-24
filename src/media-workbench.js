@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
+import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,16 +38,13 @@ export async function buildReferenceInputs(outputDir, items = []) {
 
 function resolveDefaultVoice(speaker, charactersPayload) {
   if (speaker === "旁白" || !speaker) {
-    return config.qiniu.voices.narrator;
+    return defaultVoicePresetForGender("female", "旁白").voiceType || config.qiniu.voices.narrator;
   }
   const character = (charactersPayload?.characters || []).find((item) => item.name === speaker);
   if (!character) {
-    return config.qiniu.voices.narrator;
+    return defaultVoicePresetForGender("neutral", speaker).voiceType || config.qiniu.voices.narrator;
   }
-  if (character.gender === "male") {
-    return config.qiniu.voices.male;
-  }
-  return config.qiniu.voices.female;
+  return normalizeVoiceProfile(character.voice_profile, character.gender, speaker).voiceType;
 }
 
 function dedupeRefs(items) {
@@ -62,6 +60,9 @@ function dedupeRefs(items) {
 }
 
 function inferSubjectRefs(shot, charactersPayload) {
+  if (Array.isArray(shot.subject_refs) && shot.subject_refs.length) {
+    return dedupeRefs(shot.subject_refs.map((item) => ({ kind: item.kind, key: item.key })));
+  }
   const refs = [];
   const text = [
     shot.scene_name,
@@ -110,6 +111,8 @@ function mergeAssets(existing = [], seeded = []) {
 }
 
 function defaultMediaShot(shot, charactersPayload) {
+  const character = (charactersPayload?.characters || []).find((item) => item.name === (shot.speaker || ""));
+  const voiceProfile = normalizeVoiceProfile(character?.voice_profile, character?.gender, shot.speaker || "旁白");
   return {
     shot_id: shot.shot_id,
     shot_no: shot.shot_id,
@@ -140,10 +143,11 @@ function defaultMediaShot(shot, charactersPayload) {
     audio_config: {
       speaker: shot.speaker || "旁白",
       voiceType: resolveDefaultVoice(shot.speaker, charactersPayload),
-      speedRatio: 1,
-      volume: 5,
-      pitch: 1,
-      emotion: "",
+      voiceLabel: voiceProfile.label,
+      speedRatio: voiceProfile.speedRatio,
+      volume: voiceProfile.volume,
+      pitch: voiceProfile.pitch,
+      emotion: voiceProfile.emotion || "",
       text: shot.line || shot.subtitle || "",
     },
     audio_asset: null,

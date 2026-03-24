@@ -1399,6 +1399,16 @@ audio {
   font-size: 12px;
 }
 
+.studio-inline-link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .storyboard-assets-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

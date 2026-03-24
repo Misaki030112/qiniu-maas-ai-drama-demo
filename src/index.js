@@ -17,6 +17,7 @@ import {
   writeJson,
   writeText,
 } from "./utils.js";
+import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
 
 function parseArgs(argv) {
   const args = {};
@@ -42,16 +43,13 @@ function findCharacter(characters, speaker) {
 
 function resolveVoice(speaker, characters) {
   if (speaker === "旁白") {
-    return config.qiniu.voices.narrator;
+    return defaultVoicePresetForGender("female", "旁白").voiceType || config.qiniu.voices.narrator;
   }
   const character = findCharacter(characters, speaker);
   if (!character) {
-    return config.qiniu.voices.narrator;
+    return defaultVoicePresetForGender("neutral", speaker).voiceType || config.qiniu.voices.narrator;
   }
-  if (character.gender === "male") {
-    return config.qiniu.voices.male;
-  }
-  return config.qiniu.voices.female;
+  return normalizeVoiceProfile(character.voice_profile, character.gender, speaker).voiceType;
 }
 
 function buildFinalImagePrompt(shot, characters, styleGuide) {
