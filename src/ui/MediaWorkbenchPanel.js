@@ -130,11 +130,13 @@ function buildFrameChoiceOptions(shot) {
       value: item.id,
       label: `静帧 ${index + 1}`,
       path: item.path,
+      url: item.url,
     })),
     ...(shot.reference_images || []).map((item, index) => ({
       value: `ref:${item.id || item.path || index}`,
       label: `参考图 ${index + 1}`,
       path: item.path,
+      url: item.url,
     })),
   ];
 }
@@ -146,11 +148,13 @@ function buildFirstFrameChoiceOptions(shot) {
       value: item.id,
       label: `静帧 ${index + 1}`,
       path: item.path,
+      url: item.url,
     })),
     ...(shot.reference_images || []).map((item, index) => ({
       value: `ref:${item.id || item.path || index}`,
       label: `参考图 ${index + 1}`,
       path: item.path,
+      url: item.url,
     })),
   ];
 }
@@ -160,6 +164,32 @@ function resolveFrameOptionValueByPath(options, targetPath) {
     return "";
   }
   return options.find((option) => option.path === targetPath)?.value || "";
+}
+
+function FrameChoiceGrid({ title, options, selectedValue, onSelect, note }) {
+  return (
+    <div className="studio-field">
+      <span>{title}</span>
+      <div className="studio-frame-choice-grid">
+        {options.map((option) => (
+          <button
+            key={option.value || "default"}
+            type="button"
+            className={selectedValue === option.value ? "studio-frame-choice active" : "studio-frame-choice"}
+            onClick={() => onSelect(option)}
+          >
+            {option.url ? (
+              <img src={option.url} alt={option.label} className="studio-frame-choice__preview" />
+            ) : (
+              <div className="studio-frame-choice__placeholder">{option.label}</div>
+            )}
+            <span className="studio-frame-choice__label">{option.label}</span>
+          </button>
+        ))}
+      </div>
+      {note ? <div className="studio-inline-note">{note}</div> : null}
+    </div>
+  );
 }
 
 function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel }) {
@@ -254,47 +284,39 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel
       ) : null}
 
       {capabilities.supports_first_frame ? (
-        <label className="studio-field">
-          <span>首帧图</span>
-          <select
-            value={resolveFrameOptionValueByPath(firstFrameOptions, shot.video_options?.firstFramePath || "")}
-            onChange={(event) => {
-              const option = firstFrameOptions.find((item) => item.value === event.target.value);
-              onPatch({
-                video_options: {
-                  ...(shot.video_options || {}),
-                  useFirstFrame: true,
-                  firstFramePath: option?.path || "",
-                  firstFrameLabel: option?.value ? option.label : "",
-                },
-              });
-            }}
-          >
-            {firstFrameOptions.map((option) => <option key={option.value || "auto"} value={option.value}>{option.label}</option>)}
-          </select>
-          <div className="studio-inline-note">
-            {shot.video_options?.firstFrameLabel
-              ? `当前首帧：${shot.video_options.firstFrameLabel}`
-              : "默认使用当前选中的静帧作为首帧。"}
-          </div>
-        </label>
+        <FrameChoiceGrid
+          title="首帧图"
+          options={firstFrameOptions}
+          selectedValue={resolveFrameOptionValueByPath(firstFrameOptions, shot.video_options?.firstFramePath || "")}
+          onSelect={(option) => onPatch({
+            video_options: {
+              ...(shot.video_options || {}),
+              useFirstFrame: true,
+              firstFramePath: option?.path || "",
+              firstFrameLabel: option?.value ? option.label : "",
+            },
+          })}
+          note={shot.video_options?.firstFrameLabel
+            ? `当前首帧：${shot.video_options.firstFrameLabel}`
+            : "默认使用当前选中的静帧作为首帧。"}
+        />
       ) : null}
 
       {capabilities.supports_last_frame ? (
-        <label className="studio-field">
-          <span>尾帧图</span>
-          <select
-            value={shot.video_options?.lastFrameAssetId || ""}
-            onChange={(event) => onPatch({
-              video_options: {
-                ...(shot.video_options || {}),
-                lastFrameAssetId: event.target.value,
-              },
-            })}
-          >
-            {frameOptions.map((option) => <option key={option.value || "none"} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
+        <FrameChoiceGrid
+          title="尾帧图"
+          options={frameOptions}
+          selectedValue={shot.video_options?.lastFrameAssetId || resolveFrameOptionValueByPath(frameOptions, shot.video_options?.lastFramePath || "")}
+          onSelect={(option) => onPatch({
+            video_options: {
+              ...(shot.video_options || {}),
+              lastFrameAssetId: option?.value || "",
+              lastFramePath: option?.path || "",
+              lastFrameLabel: option?.value ? option.label : "",
+            },
+          })}
+          note={shot.video_options?.lastFrameLabel ? `当前尾帧：${shot.video_options.lastFrameLabel}` : ""}
+        />
       ) : null}
 
       {capabilities.supports_audio_generation ? (
