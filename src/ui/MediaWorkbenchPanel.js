@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getVideoCapabilities } from "../video-capabilities.js";
+import { normalizeVideoSeconds } from "../providers/video-runtime.js";
 import { findVoicePresetByLabel, findVoicePresetByType, getVoiceCatalog } from "../voice-catalog.js";
 
 const inspectorTabs = [
@@ -138,8 +139,10 @@ function buildFrameChoiceOptions(shot) {
   ];
 }
 
-function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
+function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel }) {
   const frameOptions = buildFrameChoiceOptions(shot);
+  const storyboardDuration = Number(shot.duration_sec || 4);
+  const effectiveAutoDuration = normalizeVideoSeconds(currentVideoModel, storyboardDuration);
 
   return (
     <>
@@ -173,6 +176,19 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
         <div className="studio-field">
           <span>时长</span>
           <div className="studio-option-grid studio-option-grid--wide">
+            <button
+              type="button"
+              className={!shot.video_options?.durationSec ? "studio-option-card active" : "studio-option-card"}
+              onClick={() => onPatch({
+                video_options: {
+                  ...(shot.video_options || {}),
+                  durationSec: "",
+                },
+              })}
+            >
+              <strong>自动匹配</strong>
+              <small>{storyboardDuration}s {"->"} {effectiveAutoDuration}s</small>
+            </button>
             {capabilities.supports_duration_options.map((duration) => (
               <button
                 key={duration}
@@ -188,6 +204,9 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
                 <strong>{duration}s</strong>
               </button>
             ))}
+          </div>
+          <div className="studio-inline-note">
+            当前镜头分镜时长为 {storyboardDuration}s。自动匹配会按模型允许的时长档位自动归一，而不是让模型自行决定任意秒数。
           </div>
         </div>
       ) : null}
@@ -659,7 +678,12 @@ export function MediaWorkbenchPanel({
                 onUseAsLastFrame={capabilities.supports_last_frame ? (item) => useAssetAsLastFrame(item, item.name || "参考图") : null}
               />
             ) : null}
-            <VideoCapabilityOptions shot={currentShot} capabilities={capabilities} onPatch={patchCurrentShot} />
+            <VideoCapabilityOptions
+              shot={currentShot}
+              capabilities={capabilities}
+              onPatch={patchCurrentShot}
+              currentVideoModel={models.shotVideo || ""}
+            />
             {(capabilities.supports_first_frame || capabilities.supports_last_frame) ? (
               <div className="studio-field">
                 <span>快捷帧引用</span>

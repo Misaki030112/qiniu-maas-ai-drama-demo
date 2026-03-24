@@ -132,7 +132,7 @@ function defaultMediaShot(shot, charactersPayload) {
     selected_frame_asset_id: "",
     selected_video_asset_id: "",
     video_options: {
-      durationSec: Number(shot.duration_sec || 4),
+      durationSec: "",
       mode: "std",
       resolution: "",
       enableAudio: false,
