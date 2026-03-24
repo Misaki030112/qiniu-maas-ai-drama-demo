@@ -52,6 +52,7 @@ export function buildVideoTaskBody({
   referenceImages = [],
   seconds,
   aspectRatio,
+  mode = "",
   enableAudio = false,
   resolution = "",
 }) {
@@ -68,6 +69,7 @@ export function buildVideoTaskBody({
     }
 
     if (model.startsWith("kling-")) {
+      body.mode = mode || "std";
       const imageList = [
         imageBuffer ? toImageListEntry(imageBuffer, "first_frame") : null,
         lastFrameBuffer ? toImageListEntry(lastFrameBuffer, "end_frame") : null,

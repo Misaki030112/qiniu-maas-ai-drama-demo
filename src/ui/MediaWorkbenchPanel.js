@@ -117,6 +117,32 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
 
   return (
     <>
+      {capabilities.displayName?.startsWith("Kling") ? (
+        <div className="studio-field">
+          <span>模式</span>
+          <div className="studio-option-grid studio-option-grid--wide">
+            {["std", "pro"].map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={(shot.video_options?.mode || "std") === mode ? "studio-option-card active" : "studio-option-card"}
+                onClick={() => onPatch({
+                  video_options: {
+                    ...(shot.video_options || {}),
+                    mode,
+                  },
+                })}
+              >
+                <strong>{mode.toUpperCase()}</strong>
+              </button>
+            ))}
+          </div>
+          {capabilities.supports_last_frame && (shot.video_options?.mode || "std") === "std" ? (
+            <div className="studio-inline-note">尾帧控制在部分可灵模型的 STD 模式下可能不可用，必要时切到 PRO。</div>
+          ) : null}
+        </div>
+      ) : null}
+
       {capabilities.supports_duration_options?.length ? (
         <div className="studio-field">
           <span>时长</span>

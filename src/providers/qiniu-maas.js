@@ -141,6 +141,7 @@ export class QiniuMaaSClient {
     referenceImages = [],
     seconds = 5,
     aspectRatio = "16:9",
+    mode = "",
     enableAudio = false,
     resolution = "",
   }) {
@@ -200,6 +201,7 @@ export class QiniuMaaSClient {
       referenceImages,
       seconds,
       aspectRatio,
+      mode,
       enableAudio,
       resolution,
     });

@@ -118,6 +118,14 @@ const curatedModels = [
     metadata: { verifiedFrom: "七牛视频兼容接口 / SUFY 模型广场" },
   },
   {
+    modelId: "kling-v2-6",
+    displayName: "Kling V2.6",
+    provider: "Kling",
+    capabilities: ["video_generation"],
+    source: "curated",
+    metadata: { verifiedFrom: "SUFY 模型广场 / 当前接入点实测" },
+  },
+  {
     modelId: "kling-video-o1",
     displayName: "Kling Video O1",
     provider: "Kling",
