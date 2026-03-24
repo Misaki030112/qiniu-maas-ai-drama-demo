@@ -881,6 +881,7 @@ export async function readProjectDetail(projectId) {
     ...item,
     kind: item.kind || "character",
     key: item.key || item.name,
+    path: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
     url: `/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`,
   }));
   const roleReferences = subjectReferences.filter((item) => item.kind === "character");

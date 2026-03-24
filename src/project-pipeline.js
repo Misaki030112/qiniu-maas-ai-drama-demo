@@ -369,7 +369,7 @@ async function buildMediaReferenceInputs(projectDetail, paths, shot) {
   const subjectAssets = findSubjectReferenceAssets(projectDetail, shot.subject_refs || []);
   const combined = [
     ...subjectAssets.map((item) => ({
-      path: item.imagePath || item.path,
+      path: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
       name: item.name,
     })),
     ...(shot.reference_images || []).map((item) => ({
