@@ -28,9 +28,13 @@ function toGeminiImageInput(item) {
 
 function toKlingImageInput(item) {
   if (!item) return null;
-  if (item.dataUri) return item.dataUri;
-  if (item.url) return item.url;
   if (item.base64) return item.base64;
+  if (item.url) return item.url;
+  // Kling 文档要求 Base64 不能带 data:image 前缀，仅在没有 raw base64 时兜底清洗。
+  if (item.dataUri && /^data:/i.test(item.dataUri)) {
+    return item.dataUri.replace(/^data:[^;]+;base64,/i, "");
+  }
+  if (item.dataUri) return item.dataUri;
   return null;
 }
 
