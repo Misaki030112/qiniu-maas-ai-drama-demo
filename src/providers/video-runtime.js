@@ -112,8 +112,11 @@ export function buildVideoTaskBody({
       const imageList = [
         imageBuffer ? toImageListEntry(imageBuffer, "first_frame") : null,
         lastFrameBuffer ? toImageListEntry(lastFrameBuffer, "end_frame") : null,
-        ...referenceImages.map(toReferenceEntry),
       ].filter(Boolean);
+
+      if (model === "kling-video-o1") {
+        imageList.push(...referenceImages.map(toReferenceEntry).filter(Boolean));
+      }
 
       if (!imageList.length) {
         throw new Error(`模型 ${model} 缺少有效参考素材。`);

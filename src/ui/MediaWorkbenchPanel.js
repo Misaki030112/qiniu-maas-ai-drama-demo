@@ -620,6 +620,11 @@ export function MediaWorkbenchPanel({
                   当前支持首尾帧的视频模型：Veo 3.1 Fast、Veo 3.1、Kling V2.1、Kling V2.5 Turbo、Kling V2.6、Kling Video O1。
                 </div>
               ) : null}
+              {["kling-v2-5-turbo", "kling-v2-6"].includes(String(models.shotVideo || "")) ? (
+                <div className="studio-inline-note">
+                  当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1。
+                </div>
+              ) : null}
               {String(models.shotVideo || "").startsWith("sora-") ? (
                 <div className="studio-inline-note">
                   Sora 2 支持参考图 + 文本生成视频。当前接入要求参考图是公网可访问 URL；若你现在在本地 localhost 上运行，需要先配置 `APP_BASE_URL` 或使用外部公网图片。
