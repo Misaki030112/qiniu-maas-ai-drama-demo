@@ -28,6 +28,8 @@ function toGeminiImageInput(item) {
 
 function toKlingImageInput(item) {
   if (!item) return null;
+  if (item.dataUri) return item.dataUri;
+  if (item.url) return item.url;
   if (item.base64) return item.base64;
   return null;
 }
@@ -104,8 +106,44 @@ export function buildImageRequest({ model, prompt, aspectRatio = "16:9", referen
         body,
       };
     }
+    const subjectImages = [];
+    let sceneImage = null;
+    let styleImage = null;
 
-    throw new Error("Kling 多图生图暂未在当前工作台接入，请先上传 1 张参考图。");
+    for (const item of refs) {
+      const input = toKlingImageInput(item);
+      if (!input) {
+        continue;
+      }
+      const refKind = item.refKind || item.kind || "subject";
+      if (refKind === "scene" && !sceneImage) {
+        sceneImage = input;
+        continue;
+      }
+      if (refKind === "style" && !styleImage) {
+        styleImage = input;
+        continue;
+      }
+      if (subjectImages.length < 4) {
+        subjectImages.push(input);
+      }
+    }
+
+    if (!subjectImages.length && !sceneImage && !styleImage) {
+      throw new Error("Kling 多图生图缺少可用参考图。");
+    }
+
+    return {
+      endpoint: "/images/edits",
+      body: {
+        model,
+        prompt,
+        aspect_ratio: aspectRatio,
+        ...(subjectImages.length ? { subject_image_list: subjectImages } : {}),
+        ...(sceneImage ? { scene_image: sceneImage } : {}),
+        ...(styleImage ? { style_image: styleImage } : {}),
+      },
+    };
   }
 
   throw new Error(`当前模型 ${model} 暂未接入图生图，请使用 Gemini 或 Kling。`);

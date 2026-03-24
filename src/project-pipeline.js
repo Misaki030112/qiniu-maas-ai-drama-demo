@@ -371,10 +371,12 @@ async function buildMediaReferenceInputs(projectDetail, paths, shot) {
     ...subjectAssets.map((item) => ({
       path: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
       name: item.name,
+      refKind: item.kind || "subject",
     })),
     ...(shot.reference_images || []).map((item) => ({
       path: item.path,
       name: item.name,
+      refKind: item.refKind || "subject",
     })),
   ];
   return buildReferenceInputs(paths.outputDir, combined);
