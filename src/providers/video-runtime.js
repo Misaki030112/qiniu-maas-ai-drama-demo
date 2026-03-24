@@ -1,3 +1,5 @@
+import { config } from "../config.js";
+
 export function normalizeVideoSeconds(model, seconds) {
   const value = Math.max(4, Math.min(12, Math.round(seconds)));
   if (model.startsWith("kling-")) {
@@ -44,6 +46,38 @@ function toReferenceEntry(item) {
   return null;
 }
 
+function isPublicHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return false;
+    }
+    const host = url.hostname.toLowerCase();
+    return !["localhost", "127.0.0.1", "0.0.0.0"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function toPublicReferenceUrl(item) {
+  if (!item) {
+    return "";
+  }
+  if (item.publicUrl && isPublicHttpUrl(item.publicUrl)) {
+    return item.publicUrl;
+  }
+  if (item.url && isPublicHttpUrl(item.url)) {
+    return item.url;
+  }
+  if (item.url && item.url.startsWith("/") && config.appBaseUrl) {
+    const resolved = new URL(item.url, config.appBaseUrl).href;
+    if (isPublicHttpUrl(resolved)) {
+      return resolved;
+    }
+  }
+  return "";
+}
+
 export function buildVideoTaskBody({
   model,
   prompt,
@@ -65,7 +99,12 @@ export function buildVideoTaskBody({
 
   if (imageBuffer || lastFrameBuffer || referenceImages.length) {
     if (model.startsWith("sora-")) {
-      throw new Error("Sora 图生视频需要公网可访问的参考图 URL，当前项目尚未接入该上传链路。");
+      const inputReference = referenceImages.map(toPublicReferenceUrl).find(Boolean);
+      if (!inputReference) {
+        throw new Error("Sora 2 支持参考图+提示词生成视频，但当前需要公网可访问的图片 URL。请使用公网参考图，或为项目配置 APP_BASE_URL 后再使用故事板素材。");
+      }
+      body.input_reference = inputReference;
+      return body;
     }
 
     if (model.startsWith("kling-")) {

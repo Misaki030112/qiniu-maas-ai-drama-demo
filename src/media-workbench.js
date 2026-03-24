@@ -231,6 +231,9 @@ export function mapMediaAssetUrls(projectId, assets = []) {
   return assets.map((item) => ({
     ...item,
     url: item.path ? `/api/projects/${projectId}/artifacts/${item.path}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}` : "",
+    publicUrl: item.path && config.appBaseUrl
+      ? new URL(`/api/projects/${projectId}/artifacts/${item.path}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`, config.appBaseUrl).href
+      : item.publicUrl || "",
   }));
 }
 
@@ -246,12 +249,18 @@ export function mapMediaWorkbenchUrls(projectId, workbench) {
         ? {
             ...shot.audio_asset,
             url: shot.audio_asset.path ? `/api/projects/${projectId}/artifacts/${shot.audio_asset.path}${shot.audio_asset.generatedAt ? `?v=${encodeURIComponent(shot.audio_asset.generatedAt)}` : ""}` : "",
+            publicUrl: shot.audio_asset.path && config.appBaseUrl
+              ? new URL(`/api/projects/${projectId}/artifacts/${shot.audio_asset.path}${shot.audio_asset.generatedAt ? `?v=${encodeURIComponent(shot.audio_asset.generatedAt)}` : ""}`, config.appBaseUrl).href
+              : shot.audio_asset.publicUrl || "",
           }
         : null,
       lip_sync_asset: shot.lip_sync_asset
         ? {
             ...shot.lip_sync_asset,
             url: shot.lip_sync_asset.path ? `/api/projects/${projectId}/artifacts/${shot.lip_sync_asset.path}${shot.lip_sync_asset.generatedAt ? `?v=${encodeURIComponent(shot.lip_sync_asset.generatedAt)}` : ""}` : "",
+            publicUrl: shot.lip_sync_asset.path && config.appBaseUrl
+              ? new URL(`/api/projects/${projectId}/artifacts/${shot.lip_sync_asset.path}${shot.lip_sync_asset.generatedAt ? `?v=${encodeURIComponent(shot.lip_sync_asset.generatedAt)}` : ""}`, config.appBaseUrl).href
+              : shot.lip_sync_asset.publicUrl || "",
           }
         : null,
     })),

@@ -19,6 +19,7 @@ function parseList(value) {
 
 export const config = {
   workspaceRoot,
+  appBaseUrl: process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || "",
   inputStoryPath: path.join(workspaceRoot, "input", "story.txt"),
   outputRoot: path.join(workspaceRoot, "output", "runs"),
   projectDataRoot: path.join(workspaceRoot, ".data", "projects"),

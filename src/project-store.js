@@ -134,10 +134,14 @@ function mapReferenceImages(projectId, items = []) {
       return null;
     }
     const imagePath = item.path || item.imagePath || "";
+    const relativeUrl = imagePath ? `/api/projects/${projectId}/artifacts/${imagePath}` : "";
     return {
       ...item,
       path: imagePath,
-      url: imagePath ? `/api/projects/${projectId}/artifacts/${imagePath}` : item.url || "",
+      url: relativeUrl || item.url || "",
+      publicUrl: relativeUrl && config.appBaseUrl
+        ? new URL(relativeUrl, config.appBaseUrl).href
+        : item.publicUrl || "",
     };
   }).filter(Boolean);
 }
@@ -883,6 +887,9 @@ export async function readProjectDetail(projectId) {
     key: item.key || item.name,
     path: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
     url: `/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`,
+    publicUrl: config.appBaseUrl
+      ? new URL(`/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`, config.appBaseUrl).href
+      : item.publicUrl || "",
   }));
   const roleReferences = subjectReferences.filter((item) => item.kind === "character");
   const sceneReferences = subjectReferences.filter((item) => item.kind === "scene");

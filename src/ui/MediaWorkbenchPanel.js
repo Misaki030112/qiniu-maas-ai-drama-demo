@@ -620,6 +620,11 @@ export function MediaWorkbenchPanel({
                   当前支持首尾帧的视频模型：Veo 3.1 Fast、Veo 3.1、Kling V2.1、Kling V2.5 Turbo、Kling V2.6、Kling Video O1。
                 </div>
               ) : null}
+              {String(models.shotVideo || "").startsWith("sora-") ? (
+                <div className="studio-inline-note">
+                  Sora 2 支持参考图 + 文本生成视频。当前接入要求参考图是公网可访问 URL；若你现在在本地 localhost 上运行，需要先配置 `APP_BASE_URL` 或使用外部公网图片。
+                </div>
+              ) : null}
             </div>
             <label className="studio-field">
               <span>视频提示词</span>
