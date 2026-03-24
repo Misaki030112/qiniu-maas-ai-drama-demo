@@ -137,7 +137,11 @@ function defaultMediaShot(shot, charactersPayload) {
       resolution: "",
       enableAudio: false,
       useFirstFrame: true,
+      firstFramePath: "",
+      firstFrameLabel: "",
       lastFrameAssetId: "",
+      lastFramePath: "",
+      lastFrameLabel: "",
       referenceMode: "subject",
     },
     audio_config: {

@@ -24,6 +24,19 @@ function hasSubjectRef(refs, item) {
   return (refs || []).some((ref) => ref.kind === item.kind && ref.key === item.key);
 }
 
+function capabilityChips(capabilities) {
+  return [
+    capabilities.text_to_video ? "文生视频" : "",
+    capabilities.image_to_video ? "图生视频" : "",
+    capabilities.supports_first_frame ? "首帧" : "",
+    capabilities.supports_last_frame ? "尾帧" : "",
+    capabilities.supports_subject_reference ? "主体参考" : "",
+    capabilities.supports_reference_images ? "参考图" : "",
+    capabilities.supports_reference_video ? "参考视频" : "",
+    capabilities.supports_audio_generation ? "音效" : "",
+  ].filter(Boolean);
+}
+
 function SubjectRefSection({ library, refs, onToggle }) {
   return (
     <div className="studio-field">
@@ -49,7 +62,15 @@ function SubjectRefSection({ library, refs, onToggle }) {
   );
 }
 
-function ReferenceImagesSection({ shot, uploadRef, onUpload, onRemove, onNotify }) {
+function ReferenceImagesSection({
+  shot,
+  uploadRef,
+  onUpload,
+  onRemove,
+  onNotify,
+  onUseAsFirstFrame,
+  onUseAsLastFrame,
+}) {
   return (
     <div className="studio-field">
       <span>参考图片</span>
@@ -78,6 +99,8 @@ function ReferenceImagesSection({ shot, uploadRef, onUpload, onRemove, onNotify 
             </button>
             <div className="studio-reference-tile__actions">
               <button type="button" onClick={() => onNotify?.("右侧参考图已加入当前镜头")}>已引用</button>
+              {onUseAsFirstFrame ? <button type="button" onClick={() => onUseAsFirstFrame(item)}>用作首帧</button> : null}
+              {onUseAsLastFrame ? <button type="button" onClick={() => onUseAsLastFrame(item)}>用作尾帧</button> : null}
               <button type="button" onClick={() => onRemove(shot.shot_id, item.path)}>移除</button>
             </div>
           </div>
@@ -99,18 +122,24 @@ function mediaPreviewTitle(shot) {
   return shot?.shot_description || shot?.title || shot?.shot_no || shot?.shot_id || "当前镜头";
 }
 
-function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
-  const frameOptions = [
+function buildFrameChoiceOptions(shot) {
+  return [
     { value: "", label: "不使用尾帧" },
     ...(shot.frame_assets || []).map((item, index) => ({
       value: item.id,
       label: `静帧 ${index + 1}`,
+      path: item.path,
     })),
     ...(shot.reference_images || []).map((item, index) => ({
       value: `ref:${item.id || item.path || index}`,
       label: `参考图 ${index + 1}`,
+      path: item.path,
     })),
   ];
+}
+
+function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
+  const frameOptions = buildFrameChoiceOptions(shot);
 
   return (
     <>
@@ -184,7 +213,11 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch }) {
       {capabilities.supports_first_frame ? (
         <div className="studio-field">
           <span>首帧图</span>
-          <div className="studio-inline-note">默认使用当前选中的静帧作为首帧。</div>
+          <div className="studio-inline-note">
+            {shot.video_options?.firstFrameLabel
+              ? `当前首帧：${shot.video_options.firstFrameLabel}`
+              : "默认使用当前选中的静帧作为首帧。"}
+          </div>
         </div>
       ) : null}
 
@@ -296,10 +329,13 @@ export function MediaWorkbenchPanel({
   }, [audioPreviewUrl]);
 
   const currentShot = shots.find((item) => item.shot_id === selectedShotId) || null;
+  const currentShotIndex = shots.findIndex((item) => item.shot_id === selectedShotId);
+  const previousShot = currentShotIndex > 0 ? shots[currentShotIndex - 1] : null;
   const characterLibrary = project?.artifacts?.characters?.characters || [];
   const currentFrame = currentShot ? findSelectedAsset(currentShot.frame_assets, currentShot.selected_frame_asset_id) : null;
   const currentVideo = currentShot ? findSelectedAsset(currentShot.video_assets, currentShot.selected_video_asset_id) : null;
   const capabilities = getVideoCapabilities(models.shotVideo || "");
+  const capabilityLabels = capabilityChips(capabilities);
   const currentSpeakerCharacter = useMemo(
     () => characterLibrary.find((item) => item.name === (currentShot?.audio_config?.speaker || currentShot?.speaker || "")) || null,
     [characterLibrary, currentShot],
@@ -342,6 +378,78 @@ export function MediaWorkbenchPanel({
     patchCurrentShot({ subject_refs: nextRefs });
   }
 
+  function addCurrentFrameAsReference() {
+    if (!currentShot || !currentFrame?.path) {
+      return;
+    }
+    const exists = (currentShot.reference_images || []).some((item) => item.path === currentFrame.path);
+    if (exists) {
+      onNotify?.("当前静帧已经在参考图片区");
+      return;
+    }
+    patchCurrentShot({
+      reference_images: [
+        ...(currentShot.reference_images || []),
+        {
+          id: currentFrame.id,
+          name: currentShot.shot_no || currentShot.shot_id,
+          path: currentFrame.path,
+          url: currentFrame.url,
+          refKind: "subject",
+          generatedAt: currentFrame.generatedAt || "",
+        },
+      ],
+    });
+    onNotify?.("当前静帧已加入参考图片区");
+  }
+
+  function useAssetAsFirstFrame(item, label) {
+    if (!currentShot || !item?.path) {
+      return;
+    }
+    patchCurrentShot({
+      video_options: {
+        ...(currentShot.video_options || {}),
+        useFirstFrame: true,
+        firstFramePath: item.path,
+        firstFrameLabel: label,
+      },
+    });
+    onNotify?.(`已设置首帧：${label}`);
+  }
+
+  function useAssetAsLastFrame(item, label) {
+    if (!currentShot || !item?.path) {
+      return;
+    }
+    patchCurrentShot({
+      video_options: {
+        ...(currentShot.video_options || {}),
+        lastFrameAssetId: "",
+        lastFramePath: item.path,
+        lastFrameLabel: label,
+      },
+    });
+    onNotify?.(`已设置尾帧：${label}`);
+  }
+
+  function previousShotFrameCandidate() {
+    if (!previousShot) {
+      return null;
+    }
+    return findSelectedAsset(previousShot.frame_assets, previousShot.selected_frame_asset_id);
+  }
+
+  function previousShotTailCandidate() {
+    if (!previousShot?.video_options?.lastFramePath) {
+      return previousShotFrameCandidate();
+    }
+    return {
+      path: previousShot.video_options.lastFramePath,
+      label: previousShot.video_options.lastFrameLabel || `${previousShot.shot_no || previousShot.shot_id} 尾帧`,
+    };
+  }
+
   async function handleAudioPreview() {
     if (!currentShot) {
       return;
@@ -356,7 +464,7 @@ export function MediaWorkbenchPanel({
 
   function resolveTailFramePath() {
     if (!currentShot?.video_options?.lastFrameAssetId) {
-      return "";
+      return currentShot?.video_options?.lastFramePath || "";
     }
     const value = currentShot.video_options.lastFrameAssetId;
     if (value.startsWith("ref:")) {
@@ -449,6 +557,8 @@ export function MediaWorkbenchPanel({
               onUpload={onUploadReferenceImage}
               onRemove={onRemoveReferenceImage}
               onNotify={onNotify}
+              onUseAsFirstFrame={capabilities.supports_first_frame ? (item) => useAssetAsFirstFrame(item, item.name || "参考图") : null}
+              onUseAsLastFrame={capabilities.supports_last_frame ? (item) => useAssetAsLastFrame(item, item.name || "参考图") : null}
             />
             <div className="studio-action-stack">
               <button className="studio-secondary" type="button" onClick={() => onSaveShot(currentShot.shot_id)} disabled={busy}>
@@ -473,12 +583,44 @@ export function MediaWorkbenchPanel({
                   </button>
                 ))}
               </div>
+              <div className="studio-inline-actions studio-inline-actions--wrap">
+                <button type="button" onClick={addCurrentFrameAsReference} disabled={!currentFrame}>加入参考图</button>
+                {capabilities.supports_first_frame ? (
+                  <button
+                    type="button"
+                    onClick={() => useAssetAsFirstFrame(currentFrame, `${currentShot.shot_no || currentShot.shot_id} 当前静帧`)}
+                    disabled={!currentFrame}
+                  >
+                    设为首帧
+                  </button>
+                ) : null}
+                {capabilities.supports_last_frame ? (
+                  <button
+                    type="button"
+                    onClick={() => useAssetAsLastFrame(currentFrame, `${currentShot.shot_no || currentShot.shot_id} 当前静帧`)}
+                    disabled={!currentFrame}
+                  >
+                    设为尾帧
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
 
         {inspectorTab === "video" ? (
           <div className="storyboard-inspector__panel">
+            <div className="studio-field">
+              <span>模型能力</span>
+              <div className="studio-chip-row">
+                {capabilityLabels.map((label) => <span key={label} className="studio-chip">{label}</span>)}
+              </div>
+              {capabilities.supports_first_frame || capabilities.supports_last_frame ? (
+                <div className="studio-inline-note">
+                  当前支持首尾帧的视频模型：Veo 3.1 Fast、Veo 3.1、Kling V2.1、Kling V2.5 Turbo、Kling V2.6、Kling Video O1。
+                </div>
+              ) : null}
+            </div>
             <label className="studio-field">
               <span>视频提示词</span>
               <textarea
@@ -503,9 +645,94 @@ export function MediaWorkbenchPanel({
                 onUpload={onUploadReferenceImage}
                 onRemove={onRemoveReferenceImage}
                 onNotify={onNotify}
+                onUseAsFirstFrame={capabilities.supports_first_frame ? (item) => useAssetAsFirstFrame(item, item.name || "参考图") : null}
+                onUseAsLastFrame={capabilities.supports_last_frame ? (item) => useAssetAsLastFrame(item, item.name || "参考图") : null}
               />
             ) : null}
             <VideoCapabilityOptions shot={currentShot} capabilities={capabilities} onPatch={patchCurrentShot} />
+            {(capabilities.supports_first_frame || capabilities.supports_last_frame) ? (
+              <div className="studio-field">
+                <span>快捷帧引用</span>
+                <div className="studio-inline-actions studio-inline-actions--wrap">
+                  {capabilities.supports_first_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => useAssetAsFirstFrame(currentFrame, `${currentShot.shot_no || currentShot.shot_id} 当前静帧`)}
+                      disabled={!currentFrame}
+                    >
+                      当前静帧作首帧
+                    </button>
+                  ) : null}
+                  {capabilities.supports_last_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => useAssetAsLastFrame(currentFrame, `${currentShot.shot_no || currentShot.shot_id} 当前静帧`)}
+                      disabled={!currentFrame}
+                    >
+                      当前静帧作尾帧
+                    </button>
+                  ) : null}
+                  {capabilities.supports_first_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const candidate = previousShotFrameCandidate();
+                        if (candidate) {
+                          useAssetAsFirstFrame(candidate, `${previousShot?.shot_no || previousShot?.shot_id} 首帧`);
+                        }
+                      }}
+                      disabled={!previousShotFrameCandidate()}
+                    >
+                      沿用上个镜头首帧
+                    </button>
+                  ) : null}
+                  {capabilities.supports_last_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const candidate = previousShotTailCandidate();
+                        if (candidate) {
+                          useAssetAsLastFrame(candidate, candidate.label || `${previousShot?.shot_no || previousShot?.shot_id} 尾帧`);
+                        }
+                      }}
+                      disabled={!previousShotTailCandidate()}
+                    >
+                      沿用上个镜头尾帧
+                    </button>
+                  ) : null}
+                  {capabilities.supports_first_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => patchCurrentShot({
+                        video_options: {
+                          ...(currentShot.video_options || {}),
+                          firstFramePath: "",
+                          firstFrameLabel: "",
+                          useFirstFrame: true,
+                        },
+                      })}
+                    >
+                      清空首帧快捷引用
+                    </button>
+                  ) : null}
+                  {capabilities.supports_last_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => patchCurrentShot({
+                        video_options: {
+                          ...(currentShot.video_options || {}),
+                          lastFrameAssetId: "",
+                          lastFramePath: "",
+                          lastFrameLabel: "",
+                        },
+                      })}
+                    >
+                      清空尾帧
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             <div className="studio-action-stack">
               <button className="studio-secondary" type="button" onClick={() => onSaveShot(currentShot.shot_id)} disabled={busy}>
                 保存当前镜头

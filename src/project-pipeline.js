@@ -580,6 +580,9 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     if (value) {
       return value;
     }
+    if (mergedVideoOptions.lastFramePath) {
+      return mergedVideoOptions.lastFramePath;
+    }
     const selectedId = mergedVideoOptions.lastFrameAssetId || "";
     if (!selectedId) {
       return "";
@@ -594,6 +597,9 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
   const resolvedFirstFramePath = (() => {
     if (!capability.supports_first_frame || videoOptions.useFirstFrame === false) {
       return "";
+    }
+    if (mergedVideoOptions.firstFramePath) {
+      return mergedVideoOptions.firstFramePath;
     }
     if (selectedFrame?.path) {
       return selectedFrame.path;
@@ -671,6 +677,10 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
       referenceCount: referenceInputs.length,
       mode: mergedVideoOptions.mode || "std",
       enableAudio: Boolean(mergedVideoOptions.enableAudio),
+      firstFramePath: resolvedFirstFramePath,
+      firstFrameLabel: mergedVideoOptions.firstFrameLabel || "",
+      lastFramePath: resolvedTailFramePath,
+      lastFrameLabel: mergedVideoOptions.lastFrameLabel || "",
     },
   });
   await patchMediaShot(project.id, shotId, appendVideoAsset(shot, asset));
