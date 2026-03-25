@@ -461,6 +461,7 @@ export function MediaWorkbenchPanel({
   onUploadFirstFrameImage,
   onUploadLastFrameImage,
   onRemoveReferenceImage,
+  onAdoptLinkedShotFrame,
   onNotify,
   busy,
 }) {
@@ -493,6 +494,7 @@ export function MediaWorkbenchPanel({
   const currentShot = shots.find((item) => item.shot_id === selectedShotId) || null;
   const currentShotIndex = shots.findIndex((item) => item.shot_id === selectedShotId);
   const previousShot = currentShotIndex > 0 ? shots[currentShotIndex - 1] : null;
+  const nextShot = currentShotIndex >= 0 && currentShotIndex < shots.length - 1 ? shots[currentShotIndex + 1] : null;
   const characterLibrary = project?.artifacts?.characters?.characters || [];
   const currentFrame = currentShot ? findSelectedAsset(currentShot.frame_assets, currentShot.selected_frame_asset_id) : null;
   const currentVideo = currentShot ? findSelectedAsset(currentShot.video_assets, currentShot.selected_video_asset_id) : null;
@@ -593,23 +595,6 @@ export function MediaWorkbenchPanel({
       },
     });
     onNotify?.(`已设置尾帧：${label}`);
-  }
-
-  function previousShotFrameCandidate() {
-    if (!previousShot) {
-      return null;
-    }
-    return findSelectedAsset(previousShot.frame_assets, previousShot.selected_frame_asset_id);
-  }
-
-  function previousShotTailCandidate() {
-    if (!previousShot?.video_options?.lastFramePath) {
-      return previousShotFrameCandidate();
-    }
-    return {
-      path: previousShot.video_options.lastFramePath,
-      label: previousShot.video_options.lastFrameLabel || `${previousShot.shot_no || previousShot.shot_id} 尾帧`,
-    };
   }
 
   async function handleAudioPreview() {
@@ -869,29 +854,19 @@ export function MediaWorkbenchPanel({
                   {capabilities.supports_first_frame ? (
                     <button
                       type="button"
-                      onClick={() => {
-                        const candidate = previousShotFrameCandidate();
-                        if (candidate) {
-                          useAssetAsFirstFrame(candidate, `${previousShot?.shot_no || previousShot?.shot_id} 首帧`);
-                        }
-                      }}
-                      disabled={!previousShotFrameCandidate()}
+                      onClick={() => onAdoptLinkedShotFrame?.(currentShot.shot_id, "first")}
+                      disabled={!previousShot}
                     >
-                      沿用上个镜头首帧
+                      沿用上个镜头尾帧
                     </button>
                   ) : null}
                   {capabilities.supports_last_frame ? (
                     <button
                       type="button"
-                      onClick={() => {
-                        const candidate = previousShotTailCandidate();
-                        if (candidate) {
-                          useAssetAsLastFrame(candidate, candidate.label || `${previousShot?.shot_no || previousShot?.shot_id} 尾帧`);
-                        }
-                      }}
-                      disabled={!previousShotTailCandidate()}
+                      onClick={() => onAdoptLinkedShotFrame?.(currentShot.shot_id, "last")}
+                      disabled={!nextShot}
                     >
-                      沿用上个镜头尾帧
+                      沿用下个镜头首帧
                     </button>
                   ) : null}
                   {capabilities.supports_first_frame ? (

@@ -1884,6 +1884,29 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function adoptLinkedShotFrameAction(shotId, target) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText(target === "first" ? "正在沿用上个镜头尾帧" : "正在沿用下个镜头首帧");
+        const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/video/linked-frame`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "沿用相邻镜头帧失败");
+        }
+        applyProjectData(data, { preserveStoryText: true });
+        setMessage(target === "first" ? "已沿用上个镜头尾帧" : "已沿用下个镜头首帧");
+      } catch (error) {
+        setMessage(error.message || "处理失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
   function generateMediaShotAudioAction(shotId) {
     startTransition(async () => {
       try {
@@ -2217,6 +2240,7 @@ export function ProjectWorkbench({ projectId }) {
                 onUploadFirstFrameImage={(shotId, file) => uploadMediaFrameImage(shotId, file, "first")}
                 onUploadLastFrameImage={(shotId, file) => uploadMediaFrameImage(shotId, file, "last")}
                 onRemoveReferenceImage={removeMediaReferenceImage}
+                onAdoptLinkedShotFrame={adoptLinkedShotFrameAction}
                 onNotify={setMessage}
                 busy={busy}
               />

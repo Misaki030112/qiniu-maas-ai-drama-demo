@@ -40,7 +40,7 @@ import {
   writeProject,
 } from "./project-store.js";
 import { createPipelineLogger } from "./pipeline-logger.js";
-import { burnSubtitles, concatNormalizedVideos, muxAudioIntoVideo, renderSegment, sleep } from "./services/video-composition.js";
+import { burnSubtitles, captureVideoBoundaryFrame, concatNormalizedVideos, muxAudioIntoVideo, renderSegment, sleep } from "./services/video-composition.js";
 import { getVideoCapabilities } from "./video-capabilities.js";
 import { buildVideoTaskRequest, resolveVideoSize } from "./providers/video-runtime.js";
 import { buildImageRequest, explainImageReferenceConstraint } from "./providers/image-runtime.js";
@@ -209,6 +209,10 @@ async function readProjectBinaryArtifact(projectId, relativePath, publicUrl = ""
     relativePath,
     publicUrl,
   })).buffer;
+}
+
+function findSelectedAsset(items = [], selectedId = "") {
+  return items.find((item) => item.id === selectedId) || items[0] || null;
 }
 
 async function buildSubjectReferenceInputs(projectId, items = []) {
@@ -1592,6 +1596,112 @@ export async function selectSubjectReference(projectId, { kind, key, path: refer
   manifest.subjectReferences = withCurrentSubjectReference(existingReferences, nextReference);
   manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
   await saveManifest(projectId, manifest);
+  return readProjectDetail(projectId);
+}
+
+function linkedFrameFallbackPath(shot, target) {
+  if (!shot?.video_options) {
+    return "";
+  }
+  if (target === "first") {
+    return shot.video_options.lastFramePath || shot.video_options.firstFramePath || "";
+  }
+  return shot.video_options.firstFramePath || shot.video_options.lastFramePath || "";
+}
+
+export async function adoptLinkedShotFrame(projectId, shotId, { target }) {
+  if (!["first", "last"].includes(target)) {
+    throw new Error("不支持的相邻镜头帧类型。");
+  }
+
+  const projectDetail = await readProjectDetail(projectId);
+  const paths = await ensureProjectWorkspace(projectId);
+  const shots = projectDetail?.artifacts?.mediaWorkbench?.shots || [];
+  const index = shots.findIndex((item) => item.shot_id === shotId);
+  if (index === -1) {
+    throw new Error("未找到当前镜头。");
+  }
+
+  const currentShot = shots[index];
+  const relatedShot = target === "first" ? shots[index - 1] : shots[index + 1];
+  if (!relatedShot) {
+    throw new Error(target === "first" ? "当前镜头前面没有可沿用的上个镜头。" : "当前镜头后面没有可沿用的下个镜头。");
+  }
+
+  const selectedVideo = findSelectedAsset(relatedShot.video_assets, relatedShot.selected_video_asset_id);
+  if (selectedVideo?.path) {
+    const sourceVideoPath = await resolveProjectArtifactPath(paths, projectId, selectedVideo.path, selectedVideo.publicUrl || "");
+    const boundary = target === "first" ? "last" : "first";
+    const relatedSafeId = String(relatedShot.shot_id || relatedShot.shot_no || "linked").replaceAll("/", "_");
+    const currentSafeId = String(currentShot.shot_id || currentShot.shot_no || "current").replaceAll("/", "_");
+    const relativeFramePath = path.posix.join("10-video-model", `${currentSafeId}-linked-${target}-from-${relatedSafeId}-${boundary}.png`);
+    const absoluteFramePath = path.join(paths.outputDir, relativeFramePath);
+    await captureVideoBoundaryFrame({
+      videoPath: sourceVideoPath,
+      outputPath: absoluteFramePath,
+      boundary,
+    });
+    const generatedAt = new Date().toISOString();
+    const buffer = await fs.readFile(absoluteFramePath);
+    const stored = await persistProjectArtifact({
+      projectId,
+      absolutePath: absoluteFramePath,
+      relativePath: relativeFramePath,
+      buffer,
+      contentType: contentTypeFromFilePath(absoluteFramePath),
+      generatedAt,
+      stage: "media",
+      metadata: {
+        linkedFromShotId: relatedShot.shot_id,
+        boundary,
+        target,
+      },
+    });
+
+    await patchMediaShot(projectId, shotId, {
+      video_options: target === "first"
+        ? {
+            ...(currentShot.video_options || {}),
+            useFirstFrame: true,
+            firstFramePath: stored.path,
+            firstFrameLabel: `${relatedShot.shot_no || relatedShot.shot_id} 视频${boundary === "last" ? "尾帧" : "首帧"}`,
+          }
+        : {
+            ...(currentShot.video_options || {}),
+            lastFrameAssetId: "",
+            lastFramePath: stored.path,
+            lastFrameLabel: `${relatedShot.shot_no || relatedShot.shot_id} 视频${boundary === "first" ? "首帧" : "尾帧"}`,
+          },
+    });
+    return readProjectDetail(projectId);
+  }
+
+  const fallbackPath = linkedFrameFallbackPath(relatedShot, target);
+  if (!fallbackPath) {
+    throw new Error(target === "first"
+      ? "上个镜头既没有已生成视频，也没有人工设定的尾帧/首帧。"
+      : "下个镜头既没有已生成视频，也没有人工设定的首帧/尾帧。");
+  }
+
+  await patchMediaShot(projectId, shotId, {
+    video_options: target === "first"
+      ? {
+          ...(currentShot.video_options || {}),
+          useFirstFrame: true,
+          firstFramePath: fallbackPath,
+          firstFrameLabel: relatedShot.video_options?.lastFramePath
+            ? `${relatedShot.shot_no || relatedShot.shot_id} 人工尾帧`
+            : `${relatedShot.shot_no || relatedShot.shot_id} 人工帧图`,
+        }
+      : {
+          ...(currentShot.video_options || {}),
+          lastFrameAssetId: "",
+          lastFramePath: fallbackPath,
+          lastFrameLabel: relatedShot.video_options?.firstFramePath
+            ? `${relatedShot.shot_no || relatedShot.shot_id} 人工首帧`
+            : `${relatedShot.shot_no || relatedShot.shot_id} 人工帧图`,
+        },
+  });
   return readProjectDetail(projectId);
 }
 

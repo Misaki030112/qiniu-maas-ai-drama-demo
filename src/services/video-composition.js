@@ -74,6 +74,22 @@ export async function muxAudioIntoVideo({ videoPath, audioPath, outputPath }) {
   ]);
 }
 
+export async function captureVideoBoundaryFrame({ videoPath, outputPath, boundary = "last" }) {
+  await ensureDir(path.dirname(outputPath));
+  const seekArgs = boundary === "first"
+    ? ["-ss", "0"]
+    : ["-sseof", "-0.2"];
+  await runCommand(config.ffmpegPath, [
+    "-y",
+    ...seekArgs,
+    "-i",
+    videoPath,
+    "-frames:v",
+    "1",
+    outputPath,
+  ]);
+}
+
 async function concatSegments(listPath, outputPath) {
   await runCommand(config.ffmpegPath, [
     "-y",
