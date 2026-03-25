@@ -1,6 +1,7 @@
 node_modules
 output/runs
 output/projects
+output/test-reports
 .data
 .next
 .DS_Store

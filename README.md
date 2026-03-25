@@ -180,6 +180,21 @@ npm test
 npm run test:assets:sync
 ```
 
+如需按类别全量验证数据库中的真实模型：
+
+```bash
+npm run test:live:text
+npm run test:live:image
+npm run test:live:speech
+npm run test:live:video
+```
+
+每次执行后都会生成一份 JSON 报告到：
+
+```text
+output/test-reports/
+```
+
 测试文件示例：
 
 - `test/providers.text.live.integration.test.js`
