@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+
 function closeTileMenu(target) {
   target?.closest("details")?.removeAttribute("open");
 }
@@ -15,8 +17,34 @@ function TileMenuIcon() {
 }
 
 export function TileMenu({ items = [], label = "更多操作" }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (!ref.current?.hasAttribute("open")) {
+        return;
+      }
+      if (!ref.current.contains(event.target)) {
+        ref.current.removeAttribute("open");
+      }
+    }
+
+    function handleEscape(event) {
+      if (event.key === "Escape" && ref.current?.hasAttribute("open")) {
+        ref.current.removeAttribute("open");
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
   return (
-    <details className="studio-tile-menu" onClick={(event) => event.stopPropagation()}>
+    <details ref={ref} className="studio-tile-menu" onClick={(event) => event.stopPropagation()}>
       <summary className="studio-tile-menu__trigger" aria-label={label} title={label}>
         <TileMenuIcon />
       </summary>

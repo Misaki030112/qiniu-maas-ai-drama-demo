@@ -2333,7 +2333,7 @@ export function ProjectWorkbench({ projectId }) {
                     {currentReferenceHistory.length ? (
                       <div className="studio-field">
                         <span>已生成版本</span>
-                        <div className="studio-reference-grid">
+                        <div className="studio-reference-grid studio-reference-grid--history">
                           {currentReferenceHistory.map((item, index) => (
                             <div
                               key={item.path || item.url || `${item.key}-${index}`}
