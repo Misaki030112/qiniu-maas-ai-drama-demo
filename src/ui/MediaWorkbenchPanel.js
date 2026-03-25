@@ -127,10 +127,23 @@ function ReferenceImagesSection({
 }
 
 function buildSubjectLibrary(project) {
+  const dedupeCurrent = (items = [], kind) => {
+    const seen = new Set();
+    return items.reduce((result, item) => {
+      const key = `${kind}:${item?.key || item?.name || ""}`;
+      if (!item?.url || !item?.key || seen.has(key)) {
+        return result;
+      }
+      seen.add(key);
+      result.push({ ...item, kind });
+      return result;
+    }, []);
+  };
+
   return [
-    ...(project?.artifacts?.roleReferences || []).map((item) => ({ ...item, kind: "character" })),
-    ...(project?.artifacts?.sceneReferences || []).map((item) => ({ ...item, kind: "scene" })),
-    ...(project?.artifacts?.propReferences || []).map((item) => ({ ...item, kind: "prop" })),
+    ...dedupeCurrent(project?.artifacts?.roleReferences || [], "character"),
+    ...dedupeCurrent(project?.artifacts?.sceneReferences || [], "scene"),
+    ...dedupeCurrent(project?.artifacts?.propReferences || [], "prop"),
   ];
 }
 
