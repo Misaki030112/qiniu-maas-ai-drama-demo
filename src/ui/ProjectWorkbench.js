@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { MediaWorkbenchPanel } from "./MediaWorkbenchPanel.js";
+import { TileMenu } from "./TileMenu.js";
 import { getVoiceCatalog } from "../voice-catalog.js";
 
 const tabs = [
@@ -2345,15 +2346,24 @@ export function ProjectWorkbench({ projectId }) {
                               >
                                 <img src={item.url} alt={item.name || currentSubject.name} />
                               </button>
-                              <div className="studio-reference-tile__actions">
-                                <button type="button" onClick={() => setCurrentSubjectReference(item)} disabled={item.isCurrent}>
-                                  {item.isCurrent ? "当前图" : "设为当前"}
-                                </button>
-                                <button type="button" onClick={() => openPreview(item, item.name || currentSubject.name)}>查看</button>
-                                <button type="button" disabled>
-                                  {formatLogTime(item.generatedAt)}
-                                </button>
-                              </div>
+                              <TileMenu
+                                label={`${item.name || currentSubject.name} 更多操作`}
+                                items={[
+                                  {
+                                    label: item.isCurrent ? "当前图" : "设为当前",
+                                    disabled: item.isCurrent,
+                                    onSelect: () => setCurrentSubjectReference(item),
+                                  },
+                                  {
+                                    label: "查看大图",
+                                    onSelect: () => openPreview(item, item.name || currentSubject.name),
+                                  },
+                                  {
+                                    type: "info",
+                                    label: formatLogTime(item.generatedAt),
+                                  },
+                                ]}
+                              />
                             </div>
                           ))}
                         </div>
@@ -2452,10 +2462,20 @@ export function ProjectWorkbench({ projectId }) {
                             <button type="button" className="studio-reference-tile__preview" onClick={() => openPreview(item, item.name || currentSubject.name)}>
                               <img src={item.url} alt={item.name || "reference"} />
                             </button>
-                            <div className="studio-reference-tile__actions">
-                              <button type="button" onClick={() => openPreview(item, item.name || currentSubject.name)}>查看</button>
-                              <button type="button" onClick={() => removeReferenceImage(item.path)}>移除</button>
-                            </div>
+                            <TileMenu
+                              label={`${item.name || currentSubject.name} 更多操作`}
+                              items={[
+                                {
+                                  label: "查看大图",
+                                  onSelect: () => openPreview(item, item.name || currentSubject.name),
+                                },
+                                {
+                                  label: "移除参考图",
+                                  danger: true,
+                                  onSelect: () => removeReferenceImage(item.path),
+                                },
+                              ]}
+                            />
                           </div>
                         ))}
                       </div>

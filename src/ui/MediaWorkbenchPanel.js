@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { TileMenu } from "./TileMenu.js";
 import { getVideoCapabilities } from "../video-capabilities.js";
 import { normalizeVideoSeconds } from "../providers/video-runtime.js";
 import { findVoicePresetByLabel, findVoicePresetByType, getVoiceCatalog } from "../voice-catalog.js";
@@ -108,17 +109,45 @@ function ReferenceImagesSection({
         </label>
         {(shot.reference_images || []).map((item) => (
           <div key={item.path || item.url} className="studio-reference-tile">
-            <button type="button" className="studio-reference-tile__preview">
+            <button
+              type="button"
+              className="studio-reference-tile__preview"
+              onClick={() => {
+                if (item.url) {
+                  window.open(item.url, "_blank", "noopener,noreferrer");
+                }
+              }}
+            >
               <img src={item.url} alt={item.name || "reference"} />
             </button>
-            <div className="studio-reference-tile__actions">
-              <button type="button" onClick={() => onNotify?.("右侧参考图已加入当前镜头")}>已引用</button>
-              {shot.video_options?.firstFramePath === item.path ? <button type="button" disabled>当前首帧</button> : null}
-              {shot.video_options?.lastFramePath === item.path ? <button type="button" disabled>当前尾帧</button> : null}
-              {onUseAsFirstFrame ? <button type="button" onClick={() => onUseAsFirstFrame(item)}>用作首帧</button> : null}
-              {onUseAsLastFrame ? <button type="button" onClick={() => onUseAsLastFrame(item)}>用作尾帧</button> : null}
-              <button type="button" onClick={() => onRemove(shot.shot_id, item.path)}>移出参考区</button>
-            </div>
+            <TileMenu
+              label={`${item.name || "参考图"} 更多操作`}
+              items={[
+                {
+                  label: "查看大图",
+                  onSelect: () => {
+                    if (item.url) {
+                      window.open(item.url, "_blank", "noopener,noreferrer");
+                    }
+                  },
+                },
+                shot.video_options?.firstFramePath === item.path
+                  ? { label: "当前首帧", disabled: true }
+                  : (onUseAsFirstFrame
+                    ? { label: "用作首帧", onSelect: () => onUseAsFirstFrame(item) }
+                    : null),
+                shot.video_options?.lastFramePath === item.path
+                  ? { label: "当前尾帧", disabled: true }
+                  : (onUseAsLastFrame
+                    ? { label: "用作尾帧", onSelect: () => onUseAsLastFrame(item) }
+                    : null),
+                {
+                  label: "移出参考区",
+                  danger: true,
+                  onSelect: () => onRemove(shot.shot_id, item.path),
+                },
+              ]}
+            />
           </div>
         ))}
       </div>

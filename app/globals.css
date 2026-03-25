@@ -1691,6 +1691,10 @@ audio {
   gap: 8px;
 }
 
+.studio-reference-tile {
+  position: relative;
+}
+
 .studio-reference-tile--active .studio-reference-tile__preview {
   border-color: rgba(147, 239, 59, 0.48);
   box-shadow: 0 0 0 1px rgba(147, 239, 59, 0.22) inset;
@@ -1768,19 +1772,90 @@ audio {
   background: #0f1216;
 }
 
-.studio-reference-tile__actions {
-  display: flex;
-  gap: 8px;
+.studio-tile-menu {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
 }
 
-.studio-reference-tile__actions button {
-  flex: 1;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--muted);
-  padding: 6px 0;
+.studio-tile-menu__trigger {
+  list-style: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(7, 9, 12, 0.72);
+  color: rgba(255, 255, 255, 0.9);
   cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.studio-tile-menu__trigger::-webkit-details-marker {
+  display: none;
+}
+
+.studio-tile-menu__trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+.studio-tile-menu[open] .studio-tile-menu__trigger {
+  border-color: rgba(147, 239, 59, 0.3);
+  color: var(--accent);
+}
+
+.studio-tile-menu__panel {
+  position: absolute;
+  right: 0;
+  bottom: 36px;
+  min-width: 132px;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(17, 21, 27, 0.96);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(14px);
+  z-index: 3;
+}
+
+.studio-tile-menu__action,
+.studio-tile-menu__info {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.studio-tile-menu__action {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.studio-tile-menu__action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.studio-tile-menu__action:disabled,
+.studio-tile-menu__info {
+  color: var(--muted);
+}
+
+.studio-tile-menu__action--danger {
+  color: #ffb0b0;
+}
+
+.studio-tile-menu__action--danger:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.12);
 }
 
 .studio-spinner {
