@@ -38,18 +38,53 @@ function formatConsoleLine(entry) {
   return parts.filter(Boolean).join(" | ");
 }
 
+function summarizeLargeString(value) {
+  const text = String(value || "");
+  if (/^data:[^;]+;base64,/i.test(text)) {
+    return `[data-uri omitted, length=${text.length}]`;
+  }
+  if (!/\s/.test(text) && text.length > 512) {
+    return `[large-token omitted, length=${text.length}]`;
+  }
+  if (text.length > 4000) {
+    return `${text.slice(0, 4000)}...[truncated ${text.length - 4000} chars]`;
+  }
+  return text;
+}
+
+function sanitizeLogValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (Buffer.isBuffer(value)) {
+    return `[buffer omitted, bytes=${value.length}]`;
+  }
+  if (typeof value === "string") {
+    return summarizeLargeString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeLogValue(item));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeLogValue(item)]),
+    );
+  }
+  return value;
+}
+
 export async function createPipelineLogger({ projectId, stage, outputDir }) {
   const logDir = path.join(outputDir, "00-logs");
   const logPath = path.join(logDir, "pipeline.jsonl");
   await fs.mkdir(logDir, { recursive: true });
 
   async function log(entry) {
-    const payload = {
+    const payload = sanitizeLogValue({
       ts: nowIso(),
       projectId,
       stage,
       ...entry,
-    };
+    });
     await fs.appendFile(logPath, `${JSON.stringify(payload)}\n`);
     console.log(formatConsoleLine(payload));
     return payload;

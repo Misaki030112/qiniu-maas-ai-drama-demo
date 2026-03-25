@@ -671,23 +671,15 @@ function StoryboardBoard({
 }
 
 function OutputPanel({ project }) {
-  const staticUrl = project.artifacts?.outputVideoUrl;
-  const videoUrl = project.artifacts?.videoOutputUrl;
+  const finalUrl = project.artifacts?.outputVideoPublicUrl || project.artifacts?.outputVideoUrl;
   return (
-    <div className="studio-output-grid">
-      <section className="studio-panel studio-main-panel">
+    <div className="studio-output-grid studio-output-grid--single">
+      <section className="studio-panel studio-main-panel studio-output-panel">
         <div className="studio-panel__header">
-          <h2>静态合成</h2>
+          <h2>最终成片</h2>
           <span className="studio-panel__meta">{stageStatusText(project.stageState?.output?.status)}</span>
         </div>
-        {staticUrl ? <video controls src={staticUrl} /> : <EmptyCard title="暂无静态合成结果" detail="可先执行静态合成。" />}
-      </section>
-      <section className="studio-panel studio-main-panel">
-        <div className="studio-panel__header">
-          <h2>视频模型结果</h2>
-          <span className="studio-panel__meta">{stageStatusText(project.stageState?.video?.status)}</span>
-        </div>
-        {videoUrl ? <video controls src={videoUrl} /> : <EmptyCard title="暂无视频模型结果" detail="视频阶段单独执行。" />}
+        {finalUrl ? <video controls src={finalUrl} /> : <EmptyCard title="暂无成片结果" detail="先为每个分镜准备好已选中视频，再执行成片完成。" />}
       </section>
     </div>
   );
@@ -1222,6 +1214,9 @@ export function ProjectWorkbench({ projectId }) {
     : subjectKind === "scene"
       ? project?.artifacts?.sceneReferences || []
       : project?.artifacts?.propReferences || [];
+  const currentReferenceHistory = currentSubject
+    ? currentReferences.filter((item) => item.key === currentSubject.name)
+    : [];
   const storyboardGroups = storyboardDraft?.groups || [];
   const storyboardItems = storyboardGroups.flatMap((group) => (group.items || []).map((item) => ({ ...item, group_id: group.group_id })));
   const currentStoryboardItem = storyboardItems.find((item) => item.item_id === selectedStoryboardItemId) || null;
@@ -1873,6 +1868,27 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function applyMediaShotAudioToVideoAction(shotId) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在合成当前镜头配音到视频");
+        const res = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/video/audio`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "合成视频失败");
+        }
+        applyProjectData(data, { preserveStoryText: true });
+        setMessage("当前镜头已生成带配音视频");
+      } catch (error) {
+        setMessage(error.message || "合成视频失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
   async function previewMediaShotAudio(shotId) {
     try {
       setLocalBusyText("正在生成试听");
@@ -1956,10 +1972,49 @@ export function ProjectWorkbench({ projectId }) {
     });
   }
 
+  function uploadMediaFrameImage(shotId, file, kind) {
+    startTransition(async () => {
+      try {
+        setLocalBusyText(kind === "first" ? "正在上传首帧图片" : "正在上传尾帧图片");
+        const form = new FormData();
+        form.append("file", file);
+        const uploadRes = await fetch(`/api/projects/${projectId}/media/shots/${encodeURIComponent(shotId)}/reference-images`, {
+          method: "POST",
+          body: form,
+        });
+        const image = await uploadRes.json();
+        if (!uploadRes.ok) {
+          throw new Error(image.message || "上传图片失败");
+        }
+        const currentShot = (project?.artifacts?.mediaWorkbench?.shots || []).find((item) => item.shot_id === shotId);
+        await persistMediaShotPayload(shotId, {
+          ...(currentShot || {}),
+          video_options: {
+            ...(currentShot?.video_options || {}),
+            useFirstFrame: kind === "first" ? true : currentShot?.video_options?.useFirstFrame,
+            firstFramePath: kind === "first" ? image.path : (currentShot?.video_options?.firstFramePath || ""),
+            firstFrameLabel: kind === "first" ? (image.name || file.name || "上传首帧") : (currentShot?.video_options?.firstFrameLabel || ""),
+            lastFrameAssetId: kind === "last" ? "" : (currentShot?.video_options?.lastFrameAssetId || ""),
+            lastFramePath: kind === "last" ? image.path : (currentShot?.video_options?.lastFramePath || ""),
+            lastFrameLabel: kind === "last" ? (image.name || file.name || "上传尾帧") : (currentShot?.video_options?.lastFrameLabel || ""),
+          },
+        });
+        setMessage(kind === "first" ? "首帧已直接上传并引用" : "尾帧已直接上传并引用");
+      } catch (error) {
+        setMessage(error.message || "上传失败");
+      } finally {
+        setLocalBusyText("");
+      }
+    });
+  }
+
   function removeMediaReferenceImage(shotId, imagePath) {
     const currentShot = (project?.artifacts?.mediaWorkbench?.shots || []).find((item) => item.shot_id === shotId);
     const nextRefs = (currentShot?.reference_images || []).filter((item) => item.path !== imagePath);
     saveMediaShot(shotId, { reference_images: nextRefs });
+    if (currentShot?.video_options?.firstFramePath === imagePath || currentShot?.video_options?.lastFramePath === imagePath) {
+      setMessage("已从参考区移出图片；首帧/尾帧引用不会被删除。");
+    }
   }
 
   if (!project) {
@@ -1972,6 +2027,8 @@ export function ProjectWorkbench({ projectId }) {
   const jobRunning = job && ["queued", "running"].includes(job.status);
   const busy = jobRunning || isPending;
   const activeBusyText = localBusyText || job?.progressText || "";
+  const busyTitle = jobRunning && job?.status === "queued" ? "任务排队中" : "正在处理中";
+  const busyDetail = activeBusyText && activeBusyText !== busyTitle ? activeBusyText : "";
   const subjectReferenceCount = (project.artifacts?.subjectReferences || []).length;
 
   return (
@@ -2114,10 +2171,13 @@ export function ProjectWorkbench({ projectId }) {
                 onGenerateShotImage={generateMediaShotImageAction}
                 onGenerateShotVideo={generateMediaShotVideoAction}
                 onGenerateShotAudio={generateMediaShotAudioAction}
+                onApplyShotAudioToVideo={applyMediaShotAudioToVideoAction}
                 onPreviewShotAudio={previewMediaShotAudio}
                 onBatchGenerateImages={() => batchGenerateMedia("image")}
                 onBatchGenerateVideos={() => batchGenerateMedia("video")}
                 onUploadReferenceImage={uploadMediaReferenceImage}
+                onUploadFirstFrameImage={(shotId, file) => uploadMediaFrameImage(shotId, file, "first")}
+                onUploadLastFrameImage={(shotId, file) => uploadMediaFrameImage(shotId, file, "last")}
                 onRemoveReferenceImage={removeMediaReferenceImage}
                 onNotify={setMessage}
                 busy={busy}
@@ -2132,8 +2192,8 @@ export function ProjectWorkbench({ projectId }) {
           <div className={busy ? "studio-loading-mask active" : "studio-loading-mask"} aria-hidden={!busy}>
             <div className="studio-loading-card">
               <div className="studio-spinner" />
-              <strong>{jobRunning && job?.status === "queued" ? "任务排队中" : "正在处理中"}</strong>
-              <span>{activeBusyText || "正在处理中"}</span>
+              <strong>{busyTitle}</strong>
+              {busyDetail ? <span>{busyDetail}</span> : null}
             </div>
           </div>
         </main>
@@ -2228,6 +2288,28 @@ export function ProjectWorkbench({ projectId }) {
                         <img src={currentReferences.find((item) => item.key === currentSubject.name).url} alt={currentSubject.name} />
                         <span>点击查看大图</span>
                       </button>
+                    ) : null}
+                    {currentReferenceHistory.length ? (
+                      <div className="studio-field">
+                        <span>已生成版本</span>
+                        <div className="studio-reference-grid">
+                          {currentReferenceHistory.map((item, index) => (
+                            <div key={item.path || item.url || `${item.key}-${index}`} className="studio-reference-tile">
+                              <button type="button" className="studio-reference-tile__preview" onClick={() => openPreview(item, item.name || currentSubject.name)}>
+                                <img src={item.url} alt={item.name || currentSubject.name} />
+                              </button>
+                              <div className="studio-reference-tile__actions">
+                                <button type="button" onClick={() => openPreview(item, item.name || currentSubject.name)}>
+                                  {index === 0 ? "当前图" : "查看"}
+                                </button>
+                                <button type="button" disabled>
+                                  {formatLogTime(item.generatedAt)}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     ) : null}
                     <label className="studio-field">
                       <span>{subjectKind === "character" ? "角色名" : subjectKind === "scene" ? "场景名" : "道具名"}</span>
@@ -2439,10 +2521,10 @@ export function ProjectWorkbench({ projectId }) {
                 </label>
                 <div className="studio-action-stack">
                   <button className="studio-secondary" type="button" onClick={() => runStage("output")} disabled={busy || !canRunStage(project, "output", storyText)}>
-                    静态合成
+                    成片完成
                   </button>
                   <button className="studio-primary" type="button" onClick={() => runStage("video")} disabled={busy || !canRunStage(project, "video", storyText)}>
-                    视频生成
+                    批量生成分镜视频
                   </button>
                 </div>
               </>

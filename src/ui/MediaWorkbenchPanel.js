@@ -38,6 +38,19 @@ function capabilityChips(capabilities) {
   ].filter(Boolean);
 }
 
+function imageReferenceConstraintNote(model, shot) {
+  const refs = shot?.subject_refs || [];
+  if (!String(model || "").startsWith("kling-") || model === "kling-image-o1" || refs.length <= 1) {
+    return "";
+  }
+  const subjectCount = refs.filter((item) => item.kind !== "scene" && item.kind !== "prop").length;
+  const sceneCount = refs.filter((item) => item.kind === "scene").length;
+  if (["kling-v1", "kling-v2", "kling-v2-1"].includes(String(model || "")) && subjectCount < 2 && sceneCount > 0) {
+    return `当前 ${model} 不能稳定同时使用“1个角色主体 + 1个场景主体”。如果你保持这组选择，后端会阻止生成，而不是偷偷忽略其中一张。`;
+  }
+  return "";
+}
+
 function SubjectRefSection({ library, refs, onToggle }) {
   return (
     <div className="studio-field">
@@ -100,9 +113,11 @@ function ReferenceImagesSection({
             </button>
             <div className="studio-reference-tile__actions">
               <button type="button" onClick={() => onNotify?.("右侧参考图已加入当前镜头")}>已引用</button>
+              {shot.video_options?.firstFramePath === item.path ? <button type="button" disabled>当前首帧</button> : null}
+              {shot.video_options?.lastFramePath === item.path ? <button type="button" disabled>当前尾帧</button> : null}
               {onUseAsFirstFrame ? <button type="button" onClick={() => onUseAsFirstFrame(item)}>用作首帧</button> : null}
               {onUseAsLastFrame ? <button type="button" onClick={() => onUseAsLastFrame(item)}>用作尾帧</button> : null}
-              <button type="button" onClick={() => onRemove(shot.shot_id, item.path)}>移除</button>
+              <button type="button" onClick={() => onRemove(shot.shot_id, item.path)}>移出参考区</button>
             </div>
           </div>
         ))}
@@ -345,6 +360,7 @@ function ShotFilmstrip({ shots, selectedShotId, onSelectShot }) {
     <div className="storyboard-filmstrip">
       {shots.map((shot, index) => {
         const frame = findSelectedAsset(shot.frame_assets, shot.selected_frame_asset_id);
+        const video = findSelectedAsset(shot.video_assets, shot.selected_video_asset_id);
         const selected = shot.shot_id === selectedShotId;
         return (
           <button
@@ -354,7 +370,19 @@ function ShotFilmstrip({ shots, selectedShotId, onSelectShot }) {
             onClick={() => onSelectShot(shot.shot_id)}
           >
             <div className="storyboard-filmstrip__thumb">
-              {frame?.url ? <img src={frame.url} alt={shot.shot_no || shot.shot_id} /> : <div className="storyboard-filmstrip__placeholder">空镜头</div>}
+              {video?.url ? (
+                <video
+                  muted
+                  playsInline
+                  preload="metadata"
+                  src={video.url}
+                  aria-label={`${shot.shot_no || shot.shot_id} 视频缩略预览`}
+                />
+              ) : frame?.url ? (
+                <img src={frame.url} alt={shot.shot_no || shot.shot_id} />
+              ) : (
+                <div className="storyboard-filmstrip__placeholder">空镜头</div>
+              )}
               <span className="storyboard-filmstrip__shotno">{shot.shot_no || `镜头${index + 1}`}</span>
               <span className="storyboard-filmstrip__duration">{Number(shot.duration_sec || 4)}s</span>
             </div>
@@ -377,10 +405,13 @@ export function MediaWorkbenchPanel({
   onGenerateShotImage,
   onGenerateShotVideo,
   onGenerateShotAudio,
+  onApplyShotAudioToVideo,
   onPreviewShotAudio,
   onBatchGenerateImages,
   onBatchGenerateVideos,
   onUploadReferenceImage,
+  onUploadFirstFrameImage,
+  onUploadLastFrameImage,
   onRemoveReferenceImage,
   onNotify,
   busy,
@@ -389,6 +420,8 @@ export function MediaWorkbenchPanel({
   const [inspectorTab, setInspectorTab] = useState("image");
   const [audioPreviewUrl, setAudioPreviewUrl] = useState("");
   const uploadRef = useRef(null);
+  const firstFrameUploadRef = useRef(null);
+  const lastFrameUploadRef = useRef(null);
 
   const shots = workbench?.shots || [];
   const subjectLibrary = useMemo(() => buildSubjectLibrary(project), [project]);
@@ -584,7 +617,7 @@ export function MediaWorkbenchPanel({
           </div>
           <div className="storyboard-preview__canvas">
             {inspectorTab === "video" && currentVideo?.url ? (
-              <video controls src={currentVideo.url} />
+              <video key={currentVideo.url} controls src={currentVideo.url} />
             ) : currentFrame?.url ? (
               <img src={currentFrame.url} alt={currentShot.shot_no || currentShot.shot_id} />
             ) : (
@@ -617,6 +650,11 @@ export function MediaWorkbenchPanel({
 
         {inspectorTab === "image" ? (
           <div className="storyboard-inspector__panel">
+            {imageReferenceConstraintNote(models.shotImage, currentShot) ? (
+              <div className="studio-inline-note">
+                {imageReferenceConstraintNote(models.shotImage, currentShot)}
+              </div>
+            ) : null}
             <label className="studio-field">
               <span>图片提示词</span>
               <textarea
@@ -857,6 +895,46 @@ export function MediaWorkbenchPanel({
                 生成当前镜头视频
               </button>
             </div>
+            <div className="studio-inline-actions studio-inline-actions--wrap">
+              <label className="studio-inline-upload">
+                <input
+                  ref={firstFrameUploadRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/webp"
+                  style={{ display: "none" }}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      onUploadFirstFrameImage(currentShot.shot_id, file);
+                      event.target.value = "";
+                    }
+                  }}
+                />
+                <button type="button" onClick={() => firstFrameUploadRef.current?.click()} disabled={busy}>
+                  直接上传首帧
+                </button>
+              </label>
+              {capabilities.supports_last_frame ? (
+                <label className="studio-inline-upload">
+                  <input
+                    ref={lastFrameUploadRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    style={{ display: "none" }}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        onUploadLastFrameImage(currentShot.shot_id, file);
+                        event.target.value = "";
+                      }
+                    }}
+                  />
+                  <button type="button" onClick={() => lastFrameUploadRef.current?.click()} disabled={busy}>
+                    直接上传尾帧
+                  </button>
+                </label>
+              ) : null}
+            </div>
             <div className="studio-field">
               <span>视频分镜素材</span>
               <div className="storyboard-assets-grid">
@@ -1020,8 +1098,16 @@ export function MediaWorkbenchPanel({
               <button className="studio-secondary" type="button" onClick={handleAudioPreview} disabled={busy}>
                 试听
               </button>
-              <button className="studio-secondary" type="button" onClick={() => onNotify?.("口型同步当前未接入")} disabled={busy}>
-                对口型
+              <button
+                className="studio-secondary"
+                type="button"
+                onClick={() => {
+                  setInspectorTab("video");
+                  onApplyShotAudioToVideo(currentShot.shot_id);
+                }}
+                disabled={busy || !currentShot.audio_asset?.url || !currentVideo?.url}
+              >
+                合成到当前视频
               </button>
               <button className="studio-primary" type="button" onClick={() => onGenerateShotAudio(currentShot.shot_id)} disabled={busy}>
                 生成配音

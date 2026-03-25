@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
+import { buildArtifactUrl, resolveArtifactPublicUrl } from "./object-storage.js";
 import { databaseSchema, query } from "./db.js";
 import { mapMediaWorkbenchUrls, normalizeMediaWorkbench } from "./media-workbench.js";
 import { normalizeVoiceProfile } from "./voice-catalog.js";
@@ -14,15 +15,6 @@ export const stageOrder = [
   "output",
   "video",
 ];
-
-const stageDirs = {
-  adaptation: ["02-adaptation"],
-  characters: ["03-characters", "04-role-reference"],
-  storyboard: ["05-storyboard"],
-  media: ["06-images", "07-audio", "08-subtitles", "09-video"],
-  output: ["09-video"],
-  video: ["10-video-model"],
-};
 
 const stageDependencies = {
   adaptation: [],
@@ -135,15 +127,127 @@ function mapReferenceImages(projectId, items = []) {
     }
     const imagePath = item.path || item.imagePath || "";
     const relativeUrl = imagePath ? `/api/projects/${projectId}/artifacts/${imagePath}` : "";
+    const publicUrl = resolveArtifactPublicUrl({
+      projectId,
+      relativePath: imagePath,
+      generatedAt: item.generatedAt,
+      publicUrl: item.publicUrl || "",
+    });
     return {
       ...item,
       path: imagePath,
-      url: relativeUrl || item.url || "",
-      publicUrl: relativeUrl && config.appBaseUrl
-        ? new URL(relativeUrl, config.appBaseUrl).href
-        : item.publicUrl || "",
+      url: publicUrl || (imagePath ? buildArtifactUrl(projectId, imagePath, item.generatedAt) : relativeUrl || item.url || ""),
+      publicUrl,
     };
   }).filter(Boolean);
+}
+
+function referenceTimeValue(item) {
+  const value = Date.parse(item?.generatedAt || "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+async function assetExists(outputDir, item) {
+  if (!item) {
+    return false;
+  }
+  if (item.publicUrl) {
+    return true;
+  }
+  if (!item.path) {
+    return false;
+  }
+  try {
+    await fs.access(path.join(outputDir, item.path));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sanitizeMediaWorkbenchAssets(projectId, paths, workbench) {
+  if (!workbench?.shots?.length) {
+    return workbench || { updatedAt: nowIso(), shots: [] };
+  }
+
+  let changed = false;
+  const shots = [];
+
+  for (const shot of workbench.shots) {
+    const referenceImages = [];
+    for (const item of shot.reference_images || []) {
+      if (await assetExists(paths.outputDir, item)) {
+        referenceImages.push(item);
+      } else {
+        changed = true;
+      }
+    }
+
+    const frameAssets = [];
+    for (const item of shot.frame_assets || []) {
+      if (await assetExists(paths.outputDir, item)) {
+        frameAssets.push(item);
+      } else {
+        changed = true;
+      }
+    }
+
+    const videoAssets = [];
+    for (const item of shot.video_assets || []) {
+      if (await assetExists(paths.outputDir, item)) {
+        videoAssets.push(item);
+      } else {
+        changed = true;
+      }
+    }
+
+    const audioAsset = await assetExists(paths.outputDir, shot.audio_asset) ? shot.audio_asset : null;
+    const lipSyncAsset = await assetExists(paths.outputDir, shot.lip_sync_asset) ? shot.lip_sync_asset : null;
+    if (shot.audio_asset && !audioAsset) {
+      changed = true;
+    }
+    if (shot.lip_sync_asset && !lipSyncAsset) {
+      changed = true;
+    }
+
+    const selectedFrameAssetId = frameAssets.some((item) => item.id === shot.selected_frame_asset_id)
+      ? shot.selected_frame_asset_id
+      : frameAssets[0]?.id || "";
+    const selectedVideoAssetId = videoAssets.some((item) => item.id === shot.selected_video_asset_id)
+      ? shot.selected_video_asset_id
+      : videoAssets[0]?.id || "";
+    if (selectedFrameAssetId !== (shot.selected_frame_asset_id || "")) {
+      changed = true;
+    }
+    if (selectedVideoAssetId !== (shot.selected_video_asset_id || "")) {
+      changed = true;
+    }
+
+    shots.push({
+      ...shot,
+      reference_images: referenceImages,
+      frame_assets: frameAssets,
+      video_assets: videoAssets,
+      selected_frame_asset_id: selectedFrameAssetId,
+      selected_video_asset_id: selectedVideoAssetId,
+      audio_asset: audioAsset,
+      lip_sync_asset: lipSyncAsset,
+    });
+  }
+
+  const nextWorkbench = changed
+    ? {
+        ...workbench,
+        updatedAt: nowIso(),
+        shots,
+      }
+    : workbench;
+
+  if (changed) {
+    await writeJson(getMediaWorkbenchPath(projectId), nextWorkbench);
+  }
+
+  return nextWorkbench;
 }
 
 export function normalizeCharacterStagePayload(payload, adaptation = null) {
@@ -634,63 +738,7 @@ export async function markJobError(jobId, errorMessage) {
 
 export async function invalidateProject(project, fromStage) {
   const startIndex = fromStage === "story" ? 0 : stageOrder.indexOf(fromStage);
-  const paths = getProjectPaths(project.id);
   const affectedStages = fromStage === "story" ? stageOrder : stageOrder.slice(startIndex);
-  const dirNames = new Set();
-
-  for (const stage of affectedStages) {
-    for (const dirName of stageDirs[stage] || []) {
-      dirNames.add(dirName);
-    }
-  }
-
-  for (const dirName of dirNames) {
-    await fs.rm(path.join(paths.outputDir, dirName), { recursive: true, force: true });
-  }
-
-  if (fromStage === "story") {
-    await fs.rm(paths.manifestPath, { force: true });
-  } else {
-    const manifest = await readOptionalJson(paths.manifestPath);
-    if (manifest) {
-      const dropStages = new Set(affectedStages);
-      manifest.stages = (manifest.stages || []).filter((item) => !dropStages.has(item.stage));
-
-      for (const stage of affectedStages) {
-        if (stage === "storyboard") {
-          delete manifest.outputs?.storyboard;
-        }
-        if (stage === "media") {
-          delete manifest.outputs?.subtitles;
-          manifest.shots = [];
-        }
-        if (stage === "output") {
-          delete manifest.outputs?.outputVideo;
-          delete manifest.runSummary?.videoStage;
-          delete manifest.completedAt;
-        }
-        if (stage === "video") {
-          delete manifest.outputs?.videoOutput;
-          delete manifest.runSummary?.videoStage;
-        }
-        if (stage === "characters") {
-          delete manifest.outputs?.characters;
-          manifest.subjectReferences = [];
-          manifest.roleReferences = [];
-        }
-        if (stage === "adaptation") {
-          delete manifest.outputs?.adaptation;
-          manifest.subjectReferences = [];
-          manifest.roleReferences = [];
-          manifest.shots = [];
-        }
-      }
-
-      await writeJson(paths.manifestPath, manifest);
-    }
-  }
-
-  await fs.rm(paths.modelMatrixPath, { force: true });
   await ensureProjectWorkspace(project.id);
 
   if (fromStage === "story") {
@@ -713,6 +761,7 @@ export async function updateProject(projectId, patch) {
   const project = await readProject(projectId);
   let shouldInvalidateStory = false;
   let invalidateStage = null;
+  const staleStages = new Set();
 
   if (typeof patch.name === "string") {
     project.name = patch.name.trim() || project.name;
@@ -733,12 +782,21 @@ export async function updateProject(projectId, patch) {
         characters: "characters",
         storyboard: "storyboard",
         roleImage: null,
-        shotImage: "media",
-        shotVideo: "video",
+        shotImage: null,
+        shotVideo: null,
         scriptRatio: "adaptation",
         scriptStyle: "adaptation",
         scriptMode: "adaptation",
       };
+      const staleStageMap = {
+        shotImage: ["media", "output", "video"],
+        shotVideo: ["video"],
+      };
+      for (const key of changedKeys) {
+        for (const stage of staleStageMap[key] || []) {
+          staleStages.add(stage);
+        }
+      }
       invalidateStage = changedKeys
         .map((key) => invalidationMap[key])
         .filter(Boolean)
@@ -755,6 +813,15 @@ export async function updateProject(projectId, patch) {
 
   if (invalidateStage) {
     await invalidateProject(project, invalidateStage);
+    return project;
+  }
+
+  if (staleStages.size) {
+    for (const stage of staleStages) {
+      markStageIdle(project, stage, true);
+    }
+    refreshProjectReadiness(project);
+    await writeProject(project);
     return project;
   }
 
@@ -886,11 +953,19 @@ export async function readProjectDetail(projectId) {
     kind: item.kind || "character",
     key: item.key || item.name,
     path: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
-    url: `/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`,
-    publicUrl: config.appBaseUrl
-      ? new URL(`/api/projects/${projectId}/artifacts/04-role-reference/${item.imagePath}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`, config.appBaseUrl).href
-      : item.publicUrl || "",
-  }));
+    url: buildArtifactUrl(
+      projectId,
+      item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
+      item.generatedAt,
+    ),
+    publicUrl: resolveArtifactPublicUrl({
+      projectId,
+      relativePath: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
+      generatedAt: item.generatedAt,
+      publicUrl: item.publicUrl || "",
+    }),
+  }))
+    .sort((a, b) => referenceTimeValue(b) - referenceTimeValue(a));
   const roleReferences = subjectReferences.filter((item) => item.kind === "character");
   const sceneReferences = subjectReferences.filter((item) => item.kind === "scene");
   const propReferences = subjectReferences.filter((item) => item.kind === "prop");
@@ -900,10 +975,12 @@ export async function readProjectDetail(projectId) {
     audioUrl: shot.audioPath ? `/api/projects/${projectId}/artifacts/${shot.audioPath}` : "",
     segmentUrl: shot.segmentPath ? `/api/projects/${projectId}/artifacts/${shot.segmentPath}` : "",
   }));
+  const rawWorkbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
+  const sanitizedWorkbench = await sanitizeMediaWorkbenchAssets(projectId, paths, rawWorkbench);
   const mediaWorkbench = mapMediaWorkbenchUrls(
     projectId,
     normalizeMediaWorkbench(
-      await readOptionalJson(getMediaWorkbenchPath(projectId)),
+      sanitizedWorkbench,
       normalizedStoryboard,
       normalizedCharacters,
       manifest,
@@ -930,11 +1007,13 @@ export async function readProjectDetail(projectId) {
       shots,
       mediaWorkbench,
       outputVideoUrl: manifest?.outputs?.outputVideo
-        ? `/api/projects/${projectId}/artifacts/${manifest.outputs.outputVideo}`
+        ? buildArtifactUrl(projectId, manifest.outputs.outputVideo)
         : "",
+      outputVideoPublicUrl: manifest?.outputPublicUrls?.outputVideo || "",
       videoOutputUrl: manifest?.outputs?.videoOutput
-        ? `/api/projects/${projectId}/artifacts/${manifest.outputs.videoOutput}`
+        ? buildArtifactUrl(projectId, manifest.outputs.videoOutput)
         : "",
+      videoOutputPublicUrl: manifest?.outputPublicUrls?.videoOutput || "",
     },
   };
 }

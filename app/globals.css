@@ -766,6 +766,15 @@ video {
   gap: 12px;
 }
 
+.studio-output-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+}
+
+.studio-output-panel {
+  width: min(100%, 1120px);
+}
+
 .studio-card,
 .studio-shot,
 .studio-summary-card,
@@ -1278,10 +1287,12 @@ audio {
   background-position: 0 0, 0 12px, 12px -12px, -12px 0;
 }
 
-.storyboard-filmstrip__thumb img {
+.storyboard-filmstrip__thumb img,
+.storyboard-filmstrip__thumb video {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 
 .storyboard-filmstrip__placeholder {

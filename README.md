@@ -71,6 +71,12 @@ Provider 默认值：
 - `MAAS_PROVIDER=qiniu` 时默认走 `https://api.qnaigc.com/v1`
 - `MAAS_PROVIDER=sufy` 时默认走 `https://api.sufy.com/aitoken/v1`
 
+对象存储可选接入阿里云 OSS：
+
+- 开启 `ALIYUN_OSS_ENABLED=true` 后，项目内上传的参考图、生成的角色图、镜头图、音频、视频会在本地落盘后同步上传 OSS。
+- 生成链路里如果素材带有 `publicUrl`，会优先使用 OSS 公网地址，便于 `Sora`、`Kling`、`Vidu` 一类需要公网可访问素材的模型调用。
+- 推荐同时配置 `ALIYUN_OSS_PUBLIC_BASE_URL`，例如 `https://<bucket>.oss-cn-hangzhou.aliyuncs.com`。
+
 ## 模型切换与对比
 
 在项目工作台中，每个阶段都可以切换模型。也可以直接在 `.env` 中修改默认值：

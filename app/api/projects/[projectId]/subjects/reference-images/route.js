@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
+import { contentTypeFromFilePath, persistProjectArtifact } from "../../../../../../src/object-storage.js";
 import { ensureProjectWorkspace, getProjectPaths } from "../../../../../../src/project-store.js";
 import { ensureDir } from "../../../../../../src/utils.js";
 
@@ -33,14 +33,21 @@ export async function POST(request, { params }) {
     const fileName = `${kind}-${name}-${Date.now()}${ext}`;
     const absolutePath = path.join(targetDir, fileName);
     const buffer = Buffer.from(await file.arrayBuffer());
-    await fs.writeFile(absolutePath, buffer);
-
     const relativePath = path.relative(paths.outputDir, absolutePath);
+    const stored = await persistProjectArtifact({
+      projectId,
+      absolutePath,
+      relativePath,
+      buffer,
+      contentType: contentTypeFromFilePath(absolutePath),
+    });
     return NextResponse.json({
       path: relativePath,
       name: file.name || fileName,
       size: file.size || buffer.length,
-      url: `/api/projects/${projectId}/artifacts/${relativePath}`,
+      url: stored.url,
+      publicUrl: stored.publicUrl,
+      storageProvider: stored.storageProvider,
     });
   } catch (error) {
     return NextResponse.json({ message: error.message }, { status: 500 });

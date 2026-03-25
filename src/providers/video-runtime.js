@@ -259,8 +259,10 @@ export function buildVideoTaskRequest({
           ...referenceImages.map(toReferenceEntry).filter(Boolean),
         ].filter(Boolean);
         if (lastFrameBuffer) {
-          if (imageList.length >= 2) {
-            throw new Error("Kling V3 Omni 使用尾帧时，参考图片总数不能超过 2 张。请减少参考图或移除尾帧。");
+          // Kling V3 Omni allows at most two images total when using an end frame.
+          // Prefer the explicit first frame; drop extra auxiliary references instead of failing.
+          if (imageList.length > 1) {
+            imageList.splice(1);
           }
           imageList.push(toImageListEntry(lastFrameBuffer, "end_frame"));
         }

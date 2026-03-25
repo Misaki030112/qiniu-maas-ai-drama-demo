@@ -17,6 +17,13 @@ function parseList(value) {
     .filter(Boolean);
 }
 
+function readBool(value, fallback = false) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  return /^(1|true|yes|on)$/i.test(String(value).trim());
+}
+
 export const config = {
   workspaceRoot,
   appBaseUrl: process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || "",
@@ -27,6 +34,21 @@ export const config = {
   ffmpegPath: process.env.FFMPEG_PATH || ffmpegStatic,
   workbenchPort: Number(process.env.WORKBENCH_PORT || 3210),
   providerPreset,
+  objectStorage: {
+    enabled: readBool(process.env.ALIYUN_OSS_ENABLED, false),
+    aliyun: {
+      accessKeyId: process.env.ALIYUN_OSS_ACCESS_KEY_ID || "",
+      accessKeySecret: process.env.ALIYUN_OSS_ACCESS_KEY_SECRET || "",
+      bucket: process.env.ALIYUN_OSS_BUCKET || "",
+      region: process.env.ALIYUN_OSS_REGION || "cn-hangzhou",
+      endpoint: process.env.ALIYUN_OSS_ENDPOINT || (
+        process.env.ALIYUN_OSS_REGION ? `oss-${process.env.ALIYUN_OSS_REGION}.aliyuncs.com` : "oss-cn-hangzhou.aliyuncs.com"
+      ),
+      publicBaseUrl: process.env.ALIYUN_OSS_PUBLIC_BASE_URL || "",
+      prefix: process.env.ALIYUN_OSS_PREFIX || "ai-drama-demo/projects",
+      objectAcl: process.env.ALIYUN_OSS_OBJECT_ACL || "",
+    },
+  },
   qiniu: {
     apiKey: process.env.QINIU_API_KEY || "",
     baseUrl: process.env.QINIU_BASE_URL || defaultBaseUrl,

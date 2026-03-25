@@ -25,8 +25,10 @@ import {
   createFrameAsset,
   createVideoAsset,
 } from "./media-workbench.js";
+import { contentTypeFromFilePath, persistProjectArtifact } from "./object-storage.js";
 import {
   ensureProjectWorkspace,
+  getMediaWorkbenchPath,
   getProjectPaths,
   patchMediaShot,
   normalizeCharacterStagePayload,
@@ -38,6 +40,8 @@ import {
 } from "./project-store.js";
 import { createPipelineLogger } from "./pipeline-logger.js";
 import { getVideoCapabilities } from "./video-capabilities.js";
+import { buildVideoTaskRequest, resolveVideoSize } from "./providers/video-runtime.js";
+import { buildImageRequest, explainImageReferenceConstraint } from "./providers/image-runtime.js";
 import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
 
 async function reportProgress(onProgress, progressText, payload = null) {
@@ -76,7 +80,67 @@ function buildFinalImagePrompt(shot, characters, styleGuide) {
     style,
     continuity,
     shot.image_prompt,
+    "硬性约束：输出必须是单镜头单画面，不允许四宫格、分屏、拼贴、contact sheet、角色设定板、多视图展示、图文排版，不允许在同一张图中出现多个独立小画框。",
     "高清，电影灯光，真实人物，画面干净，16:9。",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function findSubjectDefinition(projectDetail, ref) {
+  if (!ref?.kind || !ref?.key) {
+    return null;
+  }
+  const artifactMap = {
+    character: projectDetail?.artifacts?.characters?.characters || [],
+    scene: projectDetail?.artifacts?.characters?.scenes || [],
+    prop: projectDetail?.artifacts?.characters?.props || [],
+  };
+  return (artifactMap[ref.kind] || []).find((item) => item.name === ref.key) || null;
+}
+
+function buildSubjectContinuityFragments(projectDetail, shot) {
+  const refs = Array.isArray(shot?.subject_refs) ? shot.subject_refs : [];
+  const fragments = refs
+    .map((ref) => {
+      const subject = findSubjectDefinition(projectDetail, ref);
+      if (!subject) {
+        return "";
+      }
+      const constraint = subject.continuity_prompt
+        || subject.reference_prompt
+        || subject.full_description
+        || subject.description
+        || "";
+      if (!constraint) {
+        return "";
+      }
+      const label = ref.kind === "character" ? "角色" : ref.kind === "scene" ? "场景" : "道具";
+      return `${label}一致性：${subject.name}，${constraint}`;
+    })
+    .filter(Boolean);
+
+  if (fragments.length) {
+    return fragments;
+  }
+
+  const speakerCharacter = findCharacter(projectDetail?.artifacts?.characters?.characters || [], shot?.speaker);
+  return speakerCharacter?.continuity_prompt ? [`角色一致性：${speakerCharacter.name}，${speakerCharacter.continuity_prompt}`] : [];
+}
+
+function buildMediaShotImagePrompt(projectDetail, shot) {
+  const styleGuide = projectDetail?.artifacts?.storyboard?.style_guide || null;
+  const style = styleGuide?.visual_style || "写实电影感真人剧";
+  const continuityFragments = buildSubjectContinuityFragments(projectDetail, shot);
+  return [
+    style,
+    continuityFragments.join("；"),
+    shot.scene_name ? `场景：${shot.scene_name}` : "",
+    shot.shot_description ? `镜头描述：${shot.shot_description}` : "",
+    shot.image_prompt || "",
+    styleGuide?.negative_prompt ? `全局避免：${styleGuide.negative_prompt}` : "",
+    "硬性约束：输出必须是单镜头单画面、单一构图，不允许四宫格、分屏、拼贴、contact sheet、角色设定板、多视图展示、前后对照版式、图文排版，不允许在同一张图中出现多个独立小画框。",
+    "高清，电影灯光，真实人物，画面干净，构图稳定。",
   ]
     .filter(Boolean)
     .join(" ");
@@ -302,14 +366,22 @@ async function buildSubjectReferenceInputs(paths, items = []) {
   return results;
 }
 
-async function renderSubjectReference({ client, model, subject, kind, paths, index, logger }) {
+async function renderSubjectReference({ projectId, client, model, subject, kind, paths, index, logger }) {
   const safeName = subjectStem(subject, `${kind}_${index + 1}`);
+  const versionToken = Date.now();
+  const fileStem = `${safeName}-${versionToken}`;
   const prompt = buildSubjectPrompt(subject, kind);
-  await writeText(path.join(paths.dirs.roleReference, `${safeName}.prompt.txt`), prompt);
+  await writeText(path.join(paths.dirs.roleReference, `${fileStem}.prompt.txt`), prompt);
 
-  const imagePath = `${safeName}.png`;
+  const imagePath = `${fileStem}.png`;
   const generatedAt = new Date().toISOString();
   const referenceImages = await buildSubjectReferenceInputs(paths, subject.reference_images || []);
+  const request = buildImageRequest({
+    model,
+    prompt,
+    aspectRatio: "16:9",
+    referenceImages,
+  });
   const image = logger
     ? await logger.measure(
         {
@@ -317,6 +389,10 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
           step: `subject_reference:${kind}:${subject.name}`,
           model,
           provider: "image",
+          meta: {
+            prompt,
+            request,
+          },
         },
         () => client.generateImage({
           model,
@@ -331,8 +407,17 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
         aspectRatio: "16:9",
         referenceImages,
       });
-  await fs.writeFile(path.join(paths.dirs.roleReference, imagePath), image.buffer);
-  await writeJson(path.join(paths.dirs.roleReference, `${safeName}.meta.json`), {
+  const absoluteImagePath = path.join(paths.dirs.roleReference, imagePath);
+  const relativeImagePath = path.relative(paths.outputDir, absoluteImagePath);
+  const storedImage = await persistProjectArtifact({
+    projectId,
+    absolutePath: absoluteImagePath,
+    relativePath: relativeImagePath,
+    buffer: image.buffer,
+    contentType: contentTypeFromFilePath(absoluteImagePath),
+    generatedAt,
+  });
+  await writeJson(path.join(paths.dirs.roleReference, `${fileStem}.meta.json`), {
     model,
     usage: image.usage || null,
     kind,
@@ -348,9 +433,12 @@ async function renderSubjectReference({ client, model, subject, kind, paths, ind
     kind,
     status: "ok",
     imagePath,
-    promptPath: `${safeName}.prompt.txt`,
+    path: relativeImagePath,
+    promptPath: `${fileStem}.prompt.txt`,
     model,
     generatedAt,
+    publicUrl: storedImage.publicUrl,
+    storageProvider: storedImage.storageProvider,
   };
 }
 
@@ -365,21 +453,118 @@ function findSubjectReferenceAssets(projectDetail, refs = []) {
     .filter(Boolean);
 }
 
-async function buildMediaReferenceInputs(projectDetail, paths, shot) {
+function hasRemoteReferenceUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && !["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+async function ensureReferencePublicUrls(projectId, outputDir, items = []) {
+  const results = [];
+  for (const item of items) {
+    if (!item?.path || hasRemoteReferenceUrl(item.publicUrl) || hasRemoteReferenceUrl(item.url)) {
+      results.push(item);
+      continue;
+    }
+    const absolutePath = path.join(outputDir, item.path);
+    try {
+      const buffer = await fs.readFile(absolutePath);
+      const storedAsset = await persistProjectArtifact({
+        projectId,
+        absolutePath,
+        relativePath: item.path,
+        buffer,
+        contentType: contentTypeFromFilePath(absolutePath),
+        generatedAt: item.generatedAt || "",
+      });
+      results.push({
+        ...item,
+        url: storedAsset.url || item.url || "",
+        publicUrl: storedAsset.publicUrl || item.publicUrl || "",
+        storageProvider: storedAsset.storageProvider || item.storageProvider || "",
+      });
+    } catch {
+      results.push(item);
+    }
+  }
+  return results;
+}
+
+async function createNormalizedVideoReferenceAsset({
+  projectId,
+  paths,
+  sourceRelativePath,
+  targetRelativePath,
+  width,
+  height,
+}) {
+  const sourcePath = path.join(paths.outputDir, sourceRelativePath);
+  const outputPath = path.join(paths.outputDir, targetRelativePath);
+  await ensureDir(path.dirname(outputPath));
+  await runCommand(config.ffmpegPath, [
+    "-y",
+    "-i",
+    sourcePath,
+    "-vf",
+    [
+      `scale=${width}:${height}:force_original_aspect_ratio=increase`,
+      `crop=${width}:${height}`,
+    ].join(","),
+    outputPath,
+  ]);
+  const generatedAt = new Date().toISOString();
+  const buffer = await fs.readFile(outputPath);
+  const storedAsset = await persistProjectArtifact({
+    projectId,
+    absolutePath: outputPath,
+    relativePath: targetRelativePath,
+    buffer,
+    contentType: contentTypeFromFilePath(outputPath),
+    generatedAt,
+  });
+  return {
+    path: targetRelativePath,
+    url: storedAsset.url,
+    publicUrl: storedAsset.publicUrl,
+    generatedAt,
+  };
+}
+
+async function buildMediaReferenceInputs(projectId, projectDetail, paths, shot) {
   const subjectAssets = findSubjectReferenceAssets(projectDetail, shot.subject_refs || []);
   const combined = [
     ...subjectAssets.map((item) => ({
       path: item.path || (item.imagePath ? path.posix.join("04-role-reference", item.imagePath) : ""),
       name: item.name,
       refKind: item.kind || "subject",
+      url: item.url || "",
+      publicUrl: item.publicUrl || "",
+      generatedAt: item.generatedAt || "",
     })),
     ...(shot.reference_images || []).map((item) => ({
       path: item.path,
       name: item.name,
       refKind: item.refKind || "subject",
+      url: item.url || "",
+      publicUrl: item.publicUrl || "",
+      generatedAt: item.generatedAt || "",
     })),
-  ];
-  return buildReferenceInputs(paths.outputDir, combined);
+  ].filter(Boolean);
+  const deduped = [];
+  const seen = new Set();
+  for (const item of combined) {
+    const key = item.publicUrl || item.path || item.url || item.name;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+  const withPublicUrls = await ensureReferencePublicUrls(projectId, paths.outputDir, deduped);
+  return buildReferenceInputs(paths.outputDir, withPublicUrls);
 }
 
 function extractSelectedShotMedia(shot) {
@@ -462,17 +647,37 @@ async function generateMediaShotImageInternal({ project, projectDetail, client, 
     stage: "media",
     outputDir: paths.outputDir,
   });
-  const prompt = shot.image_prompt || shot.shot_description || "";
+  const prompt = [
+    buildMediaShotImagePrompt(projectDetail, shot),
+    shot.negative_prompt ? `避免：${shot.negative_prompt}。` : "",
+  ].filter(Boolean).join(" ");
   if (!prompt.trim()) {
     throw new Error("当前镜头缺少图片提示词。");
   }
-  const referenceImages = await buildMediaReferenceInputs(projectDetail, paths, shot);
+  const referenceImages = await buildMediaReferenceInputs(project.id, projectDetail, paths, shot);
+  const referenceConstraint = explainImageReferenceConstraint({
+    model: project.models.shotImage,
+    referenceImages,
+  });
+  if (referenceConstraint) {
+    throw new Error(referenceConstraint);
+  }
+  const request = buildImageRequest({
+    model: project.models.shotImage,
+    prompt,
+    aspectRatio: project.models.scriptRatio || "16:9",
+    referenceImages,
+  });
   const result = await logger.measure(
     {
       event: "ai",
       step: `media_image:${shotId}`,
       model: project.models.shotImage,
       provider: "image",
+      meta: {
+        prompt,
+        request,
+      },
     },
     () => client.generateImage({
       model: project.models.shotImage,
@@ -483,12 +688,22 @@ async function generateMediaShotImageInternal({ project, projectDetail, client, 
   );
   const safeId = shotId.replaceAll("/", "_");
   const assetPath = path.join(paths.dirs.images, `${safeId}-${Date.now()}.png`);
-  await fs.writeFile(assetPath, result.buffer);
   const relativePath = path.relative(paths.outputDir, assetPath);
+  const generatedAt = new Date().toISOString();
+  const storedAsset = await persistProjectArtifact({
+    projectId: project.id,
+    absolutePath: assetPath,
+    relativePath,
+    buffer: result.buffer,
+    contentType: contentTypeFromFilePath(assetPath),
+    generatedAt,
+  });
   const asset = createFrameAsset({
     path: relativePath,
     model: project.models.shotImage,
     prompt,
+    publicUrl: storedAsset.publicUrl,
+    storageProvider: storedAsset.storageProvider,
   });
 
   const nextShot = appendFrameAsset(shot, asset);
@@ -522,6 +737,22 @@ async function generateMediaShotAudioInternal({ project, client, paths, manifest
       step: `media_audio:${shotId}`,
       model: voiceType,
       provider: "tts",
+      meta: {
+        text,
+        request: {
+          endpoint: "/voice/tts",
+          body: {
+            audio: {
+              voice_type: voiceType,
+              encoding: "mp3",
+              speed_ratio: Number(shot.audio_config?.speedRatio || 1),
+            },
+            request: {
+              text,
+            },
+          },
+        },
+      },
     },
     () => client.synthesizeSpeech({
       text,
@@ -539,12 +770,22 @@ async function generateMediaShotAudioInternal({ project, client, paths, manifest
 
   const safeId = shotId.replaceAll("/", "_");
   const assetPath = path.join(paths.dirs.audio, `${safeId}-${Date.now()}.mp3`);
-  await fs.writeFile(assetPath, result.buffer);
   const relativePath = path.relative(paths.outputDir, assetPath);
+  const generatedAt = new Date().toISOString();
+  const storedAsset = await persistProjectArtifact({
+    projectId: project.id,
+    absolutePath: assetPath,
+    relativePath,
+    buffer: result.buffer,
+    contentType: contentTypeFromFilePath(assetPath),
+    generatedAt,
+  });
   const asset = createAudioAsset({
     path: relativePath,
     voiceType,
     durationMs: result.durationMs,
+    publicUrl: storedAsset.publicUrl,
+    storageProvider: storedAsset.storageProvider,
   });
   await patchMediaShot(project.id, shotId, {
     audio_asset: asset,
@@ -552,6 +793,68 @@ async function generateMediaShotAudioInternal({ project, client, paths, manifest
   });
   const nextWorkbench = await readMediaWorkbench(project.id);
   syncManifestShotsFromWorkbench(manifest, nextWorkbench);
+  await saveManifest(project.id, manifest);
+  await markMediaArtifactsUpdated(project);
+  return readProjectDetail(project.id);
+}
+
+async function applyMediaShotAudioToVideoInternal({ project, paths, manifest, shotId }) {
+  const workbench = await readMediaWorkbench(project.id);
+  const shot = workbench.shots.find((item) => item.shot_id === shotId);
+  if (!shot) {
+    throw new Error("未找到当前镜头。");
+  }
+  const { selectedVideo } = extractSelectedShotMedia(shot);
+  if (!selectedVideo?.path) {
+    throw new Error("当前镜头还没有可合成的视频片段。");
+  }
+  if (!shot.audio_asset?.path) {
+    throw new Error("当前镜头还没有可用配音。");
+  }
+
+  const sourceVideoPath = path.join(paths.outputDir, selectedVideo.path);
+  const sourceAudioPath = path.join(paths.outputDir, shot.audio_asset.path);
+  const safeId = shotId.replaceAll("/", "_");
+  const outputPath = path.join(paths.dirs.videoModel, `${safeId}-dub-${Date.now()}.mp4`);
+  const relativePath = path.relative(paths.outputDir, outputPath);
+  const generatedAt = new Date().toISOString();
+
+  await muxAudioIntoVideo({
+    videoPath: sourceVideoPath,
+    audioPath: sourceAudioPath,
+    outputPath,
+  });
+
+  const storedAsset = await persistProjectArtifact({
+    projectId: project.id,
+    absolutePath: outputPath,
+    relativePath,
+    buffer: await fs.readFile(outputPath),
+    contentType: contentTypeFromFilePath(outputPath),
+    generatedAt,
+  });
+  const asset = createVideoAsset({
+    path: relativePath,
+    model: `${selectedVideo.model || project.models.shotVideo || "video"} / 配音合成`,
+    prompt: selectedVideo.prompt || shot.video_prompt || shot.image_prompt || "",
+    durationSec: selectedVideo.durationSec || Number(shot.duration_sec || 5),
+    provider: "ffmpeg",
+    settings: {
+      ...(selectedVideo.settings || {}),
+      muxedAudio: true,
+      sourceVideoAssetId: selectedVideo.id || "",
+      sourceAudioAssetId: shot.audio_asset.id || "",
+      sourceVideoPath: selectedVideo.path,
+      sourceAudioPath: shot.audio_asset.path,
+    },
+    publicUrl: storedAsset.publicUrl,
+    storageProvider: storedAsset.storageProvider,
+  });
+
+  await patchMediaShot(project.id, shotId, {
+    ...appendVideoAsset(shot, asset),
+    lip_sync_asset: null,
+  });
   await saveManifest(project.id, manifest);
   await markMediaArtifactsUpdated(project);
   return readProjectDetail(project.id);
@@ -574,7 +877,13 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     ...(videoOptions || {}),
   };
   const { selectedFrame } = extractSelectedShotMedia(shot);
-  const referenceInputs = await buildMediaReferenceInputs(projectDetail, paths, shot);
+  const referenceInputs = await buildMediaReferenceInputs(project.id, projectDetail, paths, shot);
+  const videoReferenceInputs = (() => {
+    if (!project.models.shotVideo.startsWith("sora-")) {
+      return referenceInputs;
+    }
+    return [];
+  })();
   const resolvedTailFramePath = (() => {
     const value = mergedVideoOptions.tailFramePath || "";
     if (value) {
@@ -611,6 +920,28 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     const firstSubjectReference = findSubjectReferenceAssets(projectDetail, shot.subject_refs || [])[0];
     return firstSubjectReference?.imagePath || firstSubjectReference?.path || "";
   })();
+  const normalizedSoraReference = project.models.shotVideo.startsWith("sora-") && selectedFrame?.path
+    ? await (async () => {
+        const [widthText, heightText] = resolveVideoSize(project.models.scriptRatio || "16:9").split("x");
+        const safeShotId = shotId.replaceAll("/", "_");
+        return createNormalizedVideoReferenceAsset({
+          projectId: project.id,
+          paths,
+          sourceRelativePath: selectedFrame.path,
+          targetRelativePath: path.posix.join("10-video-model", `${safeShotId}-sora-reference-${widthText}x${heightText}.png`),
+          width: Number(widthText),
+          height: Number(heightText),
+        });
+      })()
+    : null;
+  const effectiveVideoReferenceInputs = normalizedSoraReference
+    ? [{
+        path: normalizedSoraReference.path,
+        url: normalizedSoraReference.url,
+        publicUrl: normalizedSoraReference.publicUrl,
+        refKind: "frame",
+      }]
+    : videoReferenceInputs;
   const firstFrame = resolvedFirstFramePath
     ? await fs.readFile(path.join(paths.outputDir, resolvedFirstFramePath))
     : null;
@@ -621,6 +952,18 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
   if (!prompt.trim()) {
     throw new Error("当前镜头缺少视频提示词。");
   }
+  const request = buildVideoTaskRequest({
+    model: project.models.shotVideo,
+    prompt,
+    imageBuffer: firstFrame,
+    lastFrameBuffer: tailFrame,
+    referenceImages: capability.supports_reference_images || capability.supports_subject_reference ? effectiveVideoReferenceInputs : [],
+    seconds: Number(mergedVideoOptions.durationSec || shot.duration_sec || 5),
+    aspectRatio: project.models.scriptRatio || "16:9",
+    mode: mergedVideoOptions.mode || "std",
+    enableAudio: capability.supports_audio_generation ? Boolean(mergedVideoOptions.enableAudio) : false,
+    resolution: mergedVideoOptions.resolution || "",
+  });
   const task = await logger.measure(
     {
       event: "ai",
@@ -633,6 +976,8 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
           capability.supports_last_frame ? "尾帧" : "",
           capability.supports_subject_reference ? "主体参考" : "",
         ].filter(Boolean).join(" / "),
+        prompt,
+        request,
       },
     },
     () => client.createVideoTask({
@@ -640,7 +985,7 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
       prompt,
       imageBuffer: firstFrame,
       lastFrameBuffer: tailFrame,
-      referenceImages: capability.supports_reference_images || capability.supports_subject_reference ? referenceInputs : [],
+      referenceImages: capability.supports_reference_images || capability.supports_subject_reference ? effectiveVideoReferenceInputs : [],
       seconds: Number(mergedVideoOptions.durationSec || shot.duration_sec || 5),
       aspectRatio: project.models.scriptRatio || "16:9",
       mode: mergedVideoOptions.mode || "std",
@@ -663,8 +1008,16 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
   }
   const buffer = Buffer.from(await response.arrayBuffer());
   const outputPath = path.join(paths.dirs.videoModel, `${shotId.replaceAll("/", "_")}-${Date.now()}.mp4`);
-  await fs.writeFile(outputPath, buffer);
   const relativePath = path.relative(paths.outputDir, outputPath);
+  const generatedAt = new Date().toISOString();
+  const storedAsset = await persistProjectArtifact({
+    projectId: project.id,
+    absolutePath: outputPath,
+    relativePath,
+    buffer,
+    contentType: contentTypeFromFilePath(outputPath),
+    generatedAt,
+  });
   const asset = createVideoAsset({
     path: relativePath,
     model: project.models.shotVideo,
@@ -674,7 +1027,7 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     settings: {
       useFirstFrame: Boolean(firstFrame),
       useLastFrame: Boolean(tailFrame),
-      referenceCount: referenceInputs.length,
+      referenceCount: effectiveVideoReferenceInputs.length,
       mode: mergedVideoOptions.mode || "std",
       enableAudio: Boolean(mergedVideoOptions.enableAudio),
       firstFramePath: resolvedFirstFramePath,
@@ -682,6 +1035,8 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
       lastFramePath: resolvedTailFramePath,
       lastFrameLabel: mergedVideoOptions.lastFrameLabel || "",
     },
+    publicUrl: storedAsset.publicUrl,
+    storageProvider: storedAsset.storageProvider,
   });
   await patchMediaShot(project.id, shotId, appendVideoAsset(shot, asset));
   await saveManifest(project.id, manifest);
@@ -706,6 +1061,21 @@ async function saveChatStage({
             step: step || fileStem,
             model,
             provider: "chat",
+            meta: {
+              systemPrompt: messages.system,
+              userPrompt: messages.user,
+              request: {
+                endpoint: "/chat/completions",
+                body: {
+                  model,
+                  temperature: 0.6,
+                  messages: [
+                    { role: "system", content: messages.system },
+                    { role: "user", content: messages.user },
+                  ],
+                },
+              },
+            },
           },
           () => client.chatJson({
             model,
@@ -817,6 +1187,33 @@ async function renderSegment({ imagePath, audioPath, outputPath, durationSec }) 
   ]);
 }
 
+async function muxAudioIntoVideo({ videoPath, audioPath, outputPath }) {
+  await ensureDir(path.dirname(outputPath));
+  await runCommand(config.ffmpegPath, [
+    "-y",
+    "-i",
+    videoPath,
+    "-i",
+    audioPath,
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "192k",
+    "-af",
+    "apad",
+    "-shortest",
+    "-movflags",
+    "+faststart",
+    outputPath,
+  ]);
+}
+
 async function concatSegments(listPath, outputPath) {
   await runCommand(config.ffmpegPath, [
     "-y",
@@ -836,6 +1233,94 @@ async function concatSegments(listPath, outputPath) {
     "192k",
     outputPath,
   ]);
+}
+
+async function inspectVideoStreams(videoPath) {
+  try {
+    const { stderr } = await runCommand(config.ffmpegPath, ["-hide_banner", "-i", videoPath]);
+    return {
+      hasAudio: /Audio:/i.test(stderr || ""),
+    };
+  } catch (error) {
+    const stderr = String(error?.stderr || error?.message || "");
+    return {
+      hasAudio: /Audio:/i.test(stderr),
+    };
+  }
+}
+
+function buildNormalizedVideoFilter() {
+  return [
+    `scale=${config.video.width}:${config.video.height}:force_original_aspect_ratio=increase`,
+    `crop=${config.video.width}:${config.video.height}`,
+    `fps=${config.video.fps}`,
+    "format=yuv420p",
+  ].join(",");
+}
+
+async function normalizeVideoClip({ inputPath, outputPath, hasAudio }) {
+  await ensureDir(path.dirname(outputPath));
+  const args = ["-y", "-i", inputPath];
+  if (!hasAudio) {
+    args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
+  }
+  args.push(
+    "-map",
+    "0:v:0",
+    "-map",
+    hasAudio ? "0:a:0?" : "1:a:0",
+    "-vf",
+    buildNormalizedVideoFilter(),
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-ar",
+    "48000",
+    "-ac",
+    "2",
+    "-movflags",
+    "+faststart",
+  );
+  if (!hasAudio) {
+    args.push("-shortest");
+  }
+  args.push(outputPath);
+  await runCommand(config.ffmpegPath, args);
+}
+
+async function concatNormalizedVideos({ inputPaths, outputPath, workspaceDir }) {
+  const normalizedDir = path.join(workspaceDir, "normalized");
+  await ensureDir(normalizedDir);
+  const normalizedPaths = [];
+
+  for (let index = 0; index < inputPaths.length; index += 1) {
+    const inputPath = inputPaths[index];
+    const { hasAudio } = await inspectVideoStreams(inputPath);
+    const normalizedPath = path.join(normalizedDir, `${String(index + 1).padStart(2, "0")}.mp4`);
+    await normalizeVideoClip({
+      inputPath,
+      outputPath: normalizedPath,
+      hasAudio,
+    });
+    normalizedPaths.push(normalizedPath);
+  }
+
+  if (normalizedPaths.length === 1) {
+    await fs.copyFile(normalizedPaths[0], outputPath);
+    return;
+  }
+
+  const concatListPath = path.join(workspaceDir, "segments.txt");
+  await writeText(
+    concatListPath,
+    normalizedPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
+  );
+  await concatSegments(concatListPath, outputPath);
 }
 
 async function burnSubtitles(videoPath, subtitlesPath, outputPath) {
@@ -1001,6 +1486,7 @@ async function renderAllSubjectReferencesForProject(project, client, paths, mani
       total: subjectEntries.length,
     });
     subjectReferences.push(await renderSubjectReference({
+      projectId: project.id,
       client,
       model: project.models.roleImage,
       subject,
@@ -1010,8 +1496,9 @@ async function renderAllSubjectReferencesForProject(project, client, paths, mani
       logger: manifest.logger,
     }));
   }
-  manifest.subjectReferences = subjectReferences;
-  manifest.roleReferences = subjectReferences.filter((item) => item.kind === "character");
+  const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
+  manifest.subjectReferences = [...subjectReferences, ...existingReferences];
+  manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
   manifest.outputs.roleReference = "04-role-reference";
   return payload;
 }
@@ -1083,65 +1570,61 @@ async function executeMedia(project, client, paths, manifest, onProgress) {
 }
 
 async function executeOutput(project, paths, manifest, onProgress) {
-  await reportProgress(onProgress, "正在合成静态成片");
+  await reportProgress(onProgress, "正在拼接最终成片");
   const workbench = await readMediaWorkbench(project.id);
   if (!workbench?.shots?.length) {
     throw new Error("当前没有可用于合成的镜头。");
   }
 
-  const subtitlesPath = path.join(paths.dirs.subtitles, "subtitles.srt");
-  const concatListPath = path.join(paths.dirs.video, "segments.txt");
-  const roughVideoPath = path.join(paths.dirs.video, "rough-output.mp4");
   const outputVideoPath = path.join(paths.dirs.video, "output.mp4");
-
-  const subtitles = [];
-  const segmentPaths = [];
-  let cursor = 0;
+  const selectedVideoPaths = [];
+  const missingShots = [];
 
   for (let index = 0; index < workbench.shots.length; index += 1) {
     const shot = workbench.shots[index];
-    await reportProgress(onProgress, `正在合成镜头 ${index + 1}/${workbench.shots.length}`, {
+    await reportProgress(onProgress, `正在拼接分镜 ${index + 1}/${workbench.shots.length}`, {
       current: index + 1,
       total: workbench.shots.length,
       shotId: shot.shot_id,
     });
-    const segmentRelativePath = await renderStaticSegmentForShot(paths, shot);
-    const durationSec = Number(shot.duration_sec || 4);
-    segmentPaths.push(path.join(paths.outputDir, segmentRelativePath));
-    subtitles.push([
-      String(index + 1),
-      `${secondsToSrtTime(cursor)} --> ${secondsToSrtTime(cursor + durationSec)}`,
-      shot.dialogue || shot.audio_config?.text || "",
-      "",
-    ].join("\n"));
-    cursor += durationSec;
+    const { selectedVideo } = extractSelectedShotMedia(shot);
+    if (!selectedVideo?.path) {
+      missingShots.push(shot.shot_id);
+      continue;
+    }
+    selectedVideoPaths.push(path.join(paths.outputDir, selectedVideo.path));
   }
 
-  await writeText(subtitlesPath, subtitles.join("\n"));
-  await writeText(
-    concatListPath,
-    segmentPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
-  );
-  await concatSegments(concatListPath, roughVideoPath);
-  await burnSubtitles(roughVideoPath, subtitlesPath, outputVideoPath);
+  if (missingShots.length) {
+    throw new Error(`请先为以下分镜生成并选中视频后，再执行成片：${missingShots.join("、")}`);
+  }
+
+  await concatNormalizedVideos({
+    inputPaths: selectedVideoPaths,
+    outputPath: outputVideoPath,
+    workspaceDir: paths.dirs.video,
+  });
+
   manifest.outputs.outputVideo = "09-video/output.mp4";
+  manifest.outputPublicUrls = manifest.outputPublicUrls || {};
+  manifest.outputPublicUrls.outputVideo = (await persistProjectArtifact({
+    projectId: project.id,
+    absolutePath: outputVideoPath,
+    relativePath: "09-video/output.mp4",
+    buffer: await fs.readFile(outputVideoPath),
+    contentType: contentTypeFromFilePath(outputVideoPath),
+  })).publicUrl;
   manifest.runSummary = {
-    textModels: {
-      adaptation: project.models.adaptation,
-      characters: project.models.characters,
-      storyboard: project.models.storyboard,
-    },
-    imageModels: {
-      roleReference: project.models.roleImage,
-      shots: project.models.shotImage,
-    },
-    videoStage: {
+    ...(manifest.runSummary || {}),
+    finalCutStage: {
+      mode: "selected-shot-video-concat",
       plannedModel: project.models.shotVideo,
-      implemented: false,
+      implemented: true,
+      shotCount: selectedVideoPaths.length,
     },
   };
   manifest.completedAt = new Date().toISOString();
-  upsertStageRecord(manifest, "output", "static-compose", "09-video/output.mp4");
+  upsertStageRecord(manifest, "output", project.models.shotVideo || "selected-video-concat", "09-video/output.mp4");
 }
 
 async function pollVideoResult(client, model, provider, id) {
@@ -1197,18 +1680,21 @@ async function executeVideo(project, client, paths, manifest, onProgress) {
   }
 
   const finalVideoPath = path.join(paths.dirs.videoModel, "output.mp4");
-  if (renderedVideoPaths.length === 1) {
-    await fs.copyFile(renderedVideoPaths[0], finalVideoPath);
-  } else {
-    const concatPath = path.join(paths.dirs.videoModel, "segments.txt");
-    await writeText(
-      concatPath,
-      renderedVideoPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
-    );
-    await concatSegments(concatPath, finalVideoPath);
-  }
+  await concatNormalizedVideos({
+    inputPaths: renderedVideoPaths,
+    outputPath: finalVideoPath,
+    workspaceDir: paths.dirs.videoModel,
+  });
 
   manifest.outputs.videoOutput = "10-video-model/output.mp4";
+  manifest.outputPublicUrls = manifest.outputPublicUrls || {};
+  manifest.outputPublicUrls.videoOutput = (await persistProjectArtifact({
+    projectId: project.id,
+    absolutePath: finalVideoPath,
+    relativePath: "10-video-model/output.mp4",
+    buffer: await fs.readFile(finalVideoPath),
+    contentType: contentTypeFromFilePath(finalVideoPath),
+  })).publicUrl;
   manifest.runSummary = {
     ...(manifest.runSummary || {}),
     videoStage: {
@@ -1260,6 +1746,18 @@ export async function generateMediaShotVideo(projectId, shotId, options = {}) {
   });
 }
 
+export async function applyMediaShotAudioToVideo(projectId, shotId) {
+  const project = await readProject(projectId);
+  const paths = await ensureProjectWorkspace(projectId);
+  const manifest = await loadManifest(projectId, project);
+  return applyMediaShotAudioToVideoInternal({
+    project,
+    paths,
+    manifest,
+    shotId,
+  });
+}
+
 export async function regenerateSubjectReference(projectId, { kind, key }) {
   const project = await readProject(projectId);
   const paths = await ensureProjectWorkspace(projectId);
@@ -1301,6 +1799,7 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
       message: "开始重生成单个主体参考图",
     });
     const nextReference = await renderSubjectReference({
+      projectId,
       client,
       model: project.models.roleImage,
       subject: list[index],
@@ -1311,10 +1810,7 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
     });
 
     const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
-    manifest.subjectReferences = [
-      ...existingReferences.filter((item) => !(item.kind === kind && (item.key || item.name) === key)),
-      nextReference,
-    ];
+    manifest.subjectReferences = [nextReference, ...existingReferences];
     manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
     await saveManifest(projectId, manifest);
     await saveModelMatrix(project, manifest);
@@ -1401,7 +1897,25 @@ export async function renderAllSubjectReferences(projectId) {
   }
 }
 
-export function assertExecutable(project, stage) {
+async function inferStageReadyFromArtifacts(projectId, stage) {
+  const paths = getProjectPaths(projectId);
+  if (stage === "adaptation") {
+    return Boolean(await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")));
+  }
+  if (stage === "characters") {
+    return Boolean(await readOptionalJson(path.join(paths.dirs.characters, "characters.json")));
+  }
+  if (stage === "storyboard") {
+    return Boolean(await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json")));
+  }
+  if (stage === "media") {
+    const workbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
+    return Boolean(workbench?.shots?.length);
+  }
+  return false;
+}
+
+export async function assertExecutable(project, stage) {
   const dependencies = {
     adaptation: [],
     characters: ["adaptation"],
@@ -1411,16 +1925,25 @@ export function assertExecutable(project, stage) {
     video: ["media"],
   }[stage] || [];
   for (const dependency of dependencies) {
-    if (project.stageState[dependency]?.status !== "done") {
-      throw new Error(`请先完成 ${dependency} 阶段。`);
+    if (project.stageState[dependency]?.status === "done") {
+      continue;
     }
+    if (await inferStageReadyFromArtifacts(project.id, dependency)) {
+      project.stageState[dependency] = {
+        status: "done",
+        updatedAt: project.stageState[dependency]?.updatedAt || new Date().toISOString(),
+        error: null,
+      };
+      continue;
+    }
+    throw new Error(`请先完成 ${dependency} 阶段。`);
   }
 }
 
 export async function runProjectStage(projectId, stage, options = {}) {
   const { onProgress } = options;
   const project = await readProject(projectId);
-  assertExecutable(project, stage);
+  await assertExecutable(project, stage);
   project.stageState[stage] = {
     status: "running",
     updatedAt: new Date().toISOString(),

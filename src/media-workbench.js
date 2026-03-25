@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
+import { buildArtifactUrl, resolveArtifactPublicUrl } from "./object-storage.js";
 import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
 
 function nowIso() {
@@ -230,10 +231,18 @@ export function normalizeMediaWorkbench(workbench, storyboard, charactersPayload
 export function mapMediaAssetUrls(projectId, assets = []) {
   return assets.map((item) => ({
     ...item,
-    url: item.path ? `/api/projects/${projectId}/artifacts/${item.path}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}` : "",
-    publicUrl: item.path && config.appBaseUrl
-      ? new URL(`/api/projects/${projectId}/artifacts/${item.path}${item.generatedAt ? `?v=${encodeURIComponent(item.generatedAt)}` : ""}`, config.appBaseUrl).href
-      : item.publicUrl || "",
+    publicUrl: resolveArtifactPublicUrl({
+      projectId,
+      relativePath: item.path,
+      generatedAt: item.generatedAt,
+      publicUrl: item.publicUrl || "",
+    }),
+    url: resolveArtifactPublicUrl({
+      projectId,
+      relativePath: item.path,
+      generatedAt: item.generatedAt,
+      publicUrl: item.publicUrl || "",
+    }) || (item.path ? buildArtifactUrl(projectId, item.path, item.generatedAt) : ""),
   }));
 }
 
@@ -248,19 +257,35 @@ export function mapMediaWorkbenchUrls(projectId, workbench) {
       audio_asset: shot.audio_asset
         ? {
             ...shot.audio_asset,
-            url: shot.audio_asset.path ? `/api/projects/${projectId}/artifacts/${shot.audio_asset.path}${shot.audio_asset.generatedAt ? `?v=${encodeURIComponent(shot.audio_asset.generatedAt)}` : ""}` : "",
-            publicUrl: shot.audio_asset.path && config.appBaseUrl
-              ? new URL(`/api/projects/${projectId}/artifacts/${shot.audio_asset.path}${shot.audio_asset.generatedAt ? `?v=${encodeURIComponent(shot.audio_asset.generatedAt)}` : ""}`, config.appBaseUrl).href
-              : shot.audio_asset.publicUrl || "",
+            publicUrl: resolveArtifactPublicUrl({
+              projectId,
+              relativePath: shot.audio_asset.path,
+              generatedAt: shot.audio_asset.generatedAt,
+              publicUrl: shot.audio_asset.publicUrl || "",
+            }),
+            url: resolveArtifactPublicUrl({
+              projectId,
+              relativePath: shot.audio_asset.path,
+              generatedAt: shot.audio_asset.generatedAt,
+              publicUrl: shot.audio_asset.publicUrl || "",
+            }) || (shot.audio_asset.path ? buildArtifactUrl(projectId, shot.audio_asset.path, shot.audio_asset.generatedAt) : ""),
           }
         : null,
       lip_sync_asset: shot.lip_sync_asset
         ? {
             ...shot.lip_sync_asset,
-            url: shot.lip_sync_asset.path ? `/api/projects/${projectId}/artifacts/${shot.lip_sync_asset.path}${shot.lip_sync_asset.generatedAt ? `?v=${encodeURIComponent(shot.lip_sync_asset.generatedAt)}` : ""}` : "",
-            publicUrl: shot.lip_sync_asset.path && config.appBaseUrl
-              ? new URL(`/api/projects/${projectId}/artifacts/${shot.lip_sync_asset.path}${shot.lip_sync_asset.generatedAt ? `?v=${encodeURIComponent(shot.lip_sync_asset.generatedAt)}` : ""}`, config.appBaseUrl).href
-              : shot.lip_sync_asset.publicUrl || "",
+            publicUrl: resolveArtifactPublicUrl({
+              projectId,
+              relativePath: shot.lip_sync_asset.path,
+              generatedAt: shot.lip_sync_asset.generatedAt,
+              publicUrl: shot.lip_sync_asset.publicUrl || "",
+            }),
+            url: resolveArtifactPublicUrl({
+              projectId,
+              relativePath: shot.lip_sync_asset.path,
+              generatedAt: shot.lip_sync_asset.generatedAt,
+              publicUrl: shot.lip_sync_asset.publicUrl || "",
+            }) || (shot.lip_sync_asset.path ? buildArtifactUrl(projectId, shot.lip_sync_asset.path, shot.lip_sync_asset.generatedAt) : ""),
           }
         : null,
     })),
@@ -285,18 +310,20 @@ export function appendVideoAsset(shot, asset) {
   };
 }
 
-export function createFrameAsset({ path: assetPath, model, prompt }) {
+export function createFrameAsset({ path: assetPath, model, prompt, publicUrl = "", storageProvider = "" }) {
   return {
     id: createAssetId("frame"),
     kind: "image",
     path: assetPath,
     model,
     prompt,
+    publicUrl,
+    storageProvider,
     generatedAt: nowIso(),
   };
 }
 
-export function createVideoAsset({ path: assetPath, model, prompt, durationSec, provider, settings = {} }) {
+export function createVideoAsset({ path: assetPath, model, prompt, durationSec, provider, settings = {}, publicUrl = "", storageProvider = "" }) {
   return {
     id: createAssetId("video"),
     kind: "video",
@@ -306,16 +333,20 @@ export function createVideoAsset({ path: assetPath, model, prompt, durationSec, 
     provider,
     durationSec,
     settings,
+    publicUrl,
+    storageProvider,
     generatedAt: nowIso(),
   };
 }
 
-export function createAudioAsset({ path: assetPath, voiceType, durationMs }) {
+export function createAudioAsset({ path: assetPath, voiceType, durationMs, publicUrl = "", storageProvider = "" }) {
   return {
     id: createAssetId("audio"),
     path: assetPath,
     voiceType,
     durationMs,
+    publicUrl,
+    storageProvider,
     generatedAt: nowIso(),
   };
 }
