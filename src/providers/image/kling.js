@@ -5,6 +5,7 @@ const KLING_IMAGE_MODELS = new Set([
   "kling-v1-5",
   "kling-v2",
   "kling-v2-1",
+  "kling-v2-new",
   "kling-image-o1",
 ]);
 

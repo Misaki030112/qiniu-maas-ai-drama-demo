@@ -238,6 +238,9 @@ async function renderSubjectReference({ projectId, client, model, subject, kind,
   const imagePath = `${fileStem}.png`;
   const generatedAt = new Date().toISOString();
   const referenceImages = await buildSubjectReferenceInputs(projectId, subject.reference_images || []);
+  if (model === "kling-v2-new" && !referenceImages.length) {
+    throw new Error("kling-v2-new 是单图生图模型，必须先为当前主体提供一张参考图，或使用已有历史参考图作为底图。");
+  }
   const request = buildImageRequest({
     model,
     prompt,
@@ -302,6 +305,13 @@ async function renderSubjectReference({ projectId, client, model, subject, kind,
     publicUrl: storedImage.publicUrl,
     storageProvider: storedImage.storageProvider,
   };
+}
+
+function findSubjectReferenceHistory(manifest, kind, key) {
+  const list = manifest?.subjectReferences || manifest?.roleReferences || [];
+  return list
+    .filter((item) => item?.kind === kind && item?.key === key && item?.path)
+    .sort((a, b) => Date.parse(b.generatedAt || "") - Date.parse(a.generatedAt || ""));
 }
 
 function findSubjectReferenceAssets(projectDetail, refs = []) {
@@ -1422,6 +1432,19 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
   }
 
   const manifest = await loadManifest(projectId, project);
+  const historyRefs = findSubjectReferenceHistory(manifest, kind, key);
+  if (project.models.roleImage === "kling-v2-new" && !list[index].reference_images?.length && historyRefs.length) {
+    list[index] = {
+      ...list[index],
+      reference_images: [{
+        path: historyRefs[0].path,
+        publicUrl: historyRefs[0].publicUrl || "",
+        generatedAt: historyRefs[0].generatedAt || "",
+        refKind: "subject",
+        name: historyRefs[0].name || key,
+      }],
+    };
+  }
   const logger = await createPipelineLogger({
     projectId,
     stage: "subject_reference",
