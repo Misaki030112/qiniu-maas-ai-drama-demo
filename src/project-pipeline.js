@@ -9,11 +9,9 @@ import {
 } from "./prompts/index.js";
 import {
   ensureDir,
-  escapeSubtitlePath,
   readJson,
   readText,
   runCommand,
-  secondsToSrtTime,
   writeJson,
   writeText,
 } from "./utils.js";
@@ -28,8 +26,6 @@ import {
 import { contentTypeFromFilePath, persistProjectArtifact } from "./object-storage.js";
 import {
   ensureProjectWorkspace,
-  getMediaWorkbenchPath,
-  getProjectPaths,
   patchMediaShot,
   normalizeCharacterStagePayload,
   normalizeStoryboardPayload,
@@ -39,23 +35,21 @@ import {
   writeProject,
 } from "./project-store.js";
 import { createPipelineLogger } from "./pipeline-logger.js";
+import { burnSubtitles, concatNormalizedVideos, muxAudioIntoVideo, renderSegment, sleep } from "./services/video-composition.js";
 import { getVideoCapabilities } from "./video-capabilities.js";
 import { buildVideoTaskRequest, resolveVideoSize } from "./providers/video-runtime.js";
 import { buildImageRequest, explainImageReferenceConstraint } from "./providers/image-runtime.js";
 import { inferModelFamily, MODEL_CATEGORY } from "./providers/model-classification.js";
 import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
+import { loadManifest, saveManifest, saveModelMatrix, upsertStageRecord } from "./stages/stage-manifest.js";
+import { assertExecutable } from "./stages/stage-requirements.js";
+import { validateCharacterPayload } from "./stages/subject-analysis.js";
 
 async function reportProgress(onProgress, progressText, payload = null) {
   if (!onProgress) {
     return;
   }
   await onProgress({ progressText, payload });
-}
-
-function buildValidationError(message, details = {}) {
-  const error = new Error(message);
-  error.details = details;
-  return error;
 }
 
 function findCharacter(characters, speaker) {
@@ -145,161 +139,6 @@ function buildMediaShotImagePrompt(projectDetail, shot) {
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-function collectScriptText(adaptation) {
-  return [
-    adaptation?.script_text || "",
-    ...(adaptation?.chapters || []).map((item) => item.content || item.summary || ""),
-  ].join("\n");
-}
-
-function extractCharacterCandidates(adaptation) {
-  const text = collectScriptText(adaptation);
-  const stop = new Set([
-    "项目",
-    "样片",
-    "会议室",
-    "数据",
-    "剧情",
-    "角色",
-    "镜头",
-    "场景",
-    "场戏",
-    "深夜",
-    "真人剧",
-    "点众",
-    "科技",
-    "业务",
-    "模型",
-    "链路",
-    "旁白",
-    "用户",
-    "理由",
-    "技术",
-    "参数",
-    "生成",
-    "界面",
-    "剧情片",
-    "台词",
-    "模块",
-    "晨光",
-    "百叶",
-    "发送",
-    "键转",
-  ]);
-
-  const patterns = [
-    /(?:^|[，。；：、\s\n“”"'‘’【】（）()])([\u4e00-\u9fa5]{2,3})(?=(?:将|把|对|向|在|从|正|默默|突然|快速|调试|收到|冲进|走进|看着|盯着|按住|说|问|答|听|拿|坐|站|抬|调出))/g,
-    /(?:^|[，。；：、\s\n“”"'‘’【】（）()])([\u4e00-\u9fa5]{2,3})(?=[:：])/g,
-  ];
-
-  const names = [];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const value = match[1];
-      if (!value || stop.has(value) || names.includes(value)) {
-        continue;
-      }
-      names.push(value);
-    }
-  }
-
-  if (!names.length) {
-    for (const value of uniqueNamesFromText(text)) {
-      if (!stop.has(value) && !names.includes(value)) {
-        names.push(value);
-      }
-    }
-  }
-
-  return names.slice(0, 3);
-}
-
-function isLikelyCharacterName(name, adaptation) {
-  const scriptText = collectScriptText(adaptation);
-  if (!name || !scriptText) {
-    return false;
-  }
-  if (!scriptText.includes(name)) {
-    return false;
-  }
-  const banned = ["工牌", "键盘", "报告", "进度条", "工作台", "会议室", "玻璃", "倒影", "样片", "标题", "平台", "午夜"];
-  return !banned.some((item) => name.includes(item));
-}
-
-function validateCharacterPayload(payload, adaptation) {
-  const candidates = extractCharacterCandidates(adaptation);
-  const characters = payload.characters || [];
-  if (!characters.length) {
-    throw buildValidationError("主体分析失败：AI 未返回任何角色。", {
-      expectedNames: candidates,
-    });
-  }
-
-  const invalidNames = characters
-    .map((item) => item.name)
-    .filter((name) => !isLikelyCharacterName(name, adaptation));
-
-  if (invalidNames.length) {
-    throw buildValidationError("主体分析失败：AI 返回的角色名未在剧本正文中正确出现。", {
-      invalidNames,
-      expectedNames: candidates,
-    });
-  }
-
-  return payload;
-}
-
-function inferStyleFromAdaptation(adaptation) {
-  return adaptation?.style_preset || "写实";
-}
-
-function inferSceneName(adaptation, index) {
-  const sceneHint = adaptation?.subject_hints?.scenes?.[index];
-  if (typeof sceneHint === "string" && sceneHint.trim()) {
-    return sceneHint.trim();
-  }
-  if (sceneHint?.name) {
-    return sceneHint.name;
-  }
-  return `核心场景${index + 1}`;
-}
-
-function inferPropName(adaptation, index) {
-  const propHint = adaptation?.subject_hints?.props?.[index];
-  if (typeof propHint === "string" && propHint.trim()) {
-    return propHint.trim();
-  }
-  if (propHint?.name) {
-    return propHint.name;
-  }
-  return `关键道具${index + 1}`;
-}
-
-function buildProfessionalCharacterDescription({
-  name,
-  gender,
-  age,
-  wardrobe,
-  hairstyle,
-  face,
-  figure,
-  accessories,
-  style,
-}) {
-  const genderText = gender === "male" ? "男性" : gender === "female" ? "女性" : "人物";
-  return [
-    `8K画质，${style}风格，电影级摄影`,
-    `${age}${genderText}，${figure}，${hairstyle}，${face}`,
-    `${wardrobe}${accessories ? `，${accessories}` : ""}`,
-    "左区：角色正脸特写，面部占满左区，五官、发型、配饰清晰，无身体入镜、无遮挡变形",
-    "右区：标准角色设定三视图，横向排列侧视图、正视图、背视图，从头到脚完整无遮挡",
-    "核心约束：特写与三视图为同一角色，五官、服装、配饰、体态100%一致",
-    "背景要求：干净纯色或浅灰背景，角色无多余干扰元素",
-    "摄影要求：统一85mm焦距，平视，无畸变",
-    "状态要求：无剧烈动作，中性或克制表情，自然站立，双手自然下垂，无手持物",
-  ].join("；");
 }
 
 function buildSubjectPrompt(subject, kind) {
@@ -1148,267 +987,12 @@ async function runTextComparisons({ client, stageName, messages, outputDir, mode
   }
 }
 
-async function renderSegment({ imagePath, audioPath, outputPath, durationSec }) {
-  const frames = Math.max(1, Math.ceil(durationSec * config.video.fps));
-  const useKenBurns = config.video.renderMode === "kenburns";
-  const videoFilter = useKenBurns
-    ? [
-        `scale=${config.video.width}:${config.video.height}:force_original_aspect_ratio=increase`,
-        `crop=${config.video.width}:${config.video.height}`,
-        `zoompan=z='min(zoom+0.0012,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${config.video.width}x${config.video.height}:fps=${config.video.fps}`,
-        "format=yuv420p",
-      ].join(",")
-    : [
-        `scale=${config.video.width}:${config.video.height}:force_original_aspect_ratio=decrease`,
-        `pad=${config.video.width}:${config.video.height}:(ow-iw)/2:(oh-ih)/2`,
-        "format=yuv420p",
-      ].join(",");
-
-  await runCommand(config.ffmpegPath, [
-    "-y",
-    "-loop",
-    "1",
-    "-framerate",
-    String(config.video.fps),
-    "-i",
-    imagePath,
-    "-i",
-    audioPath,
-    "-vf",
-    videoFilter,
-    "-af",
-    "apad",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "192k",
-    "-t",
-    String(durationSec),
-    outputPath,
-  ]);
-}
-
-async function muxAudioIntoVideo({ videoPath, audioPath, outputPath }) {
-  await ensureDir(path.dirname(outputPath));
-  await runCommand(config.ffmpegPath, [
-    "-y",
-    "-i",
-    videoPath,
-    "-i",
-    audioPath,
-    "-map",
-    "0:v:0",
-    "-map",
-    "1:a:0",
-    "-c:v",
-    "copy",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "192k",
-    "-af",
-    "apad",
-    "-shortest",
-    "-movflags",
-    "+faststart",
-    outputPath,
-  ]);
-}
-
-async function concatSegments(listPath, outputPath) {
-  await runCommand(config.ffmpegPath, [
-    "-y",
-    "-f",
-    "concat",
-    "-safe",
-    "0",
-    "-i",
-    listPath,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "192k",
-    outputPath,
-  ]);
-}
-
-async function inspectVideoStreams(videoPath) {
-  try {
-    const { stderr } = await runCommand(config.ffmpegPath, ["-hide_banner", "-i", videoPath]);
-    return {
-      hasAudio: /Audio:/i.test(stderr || ""),
-    };
-  } catch (error) {
-    const stderr = String(error?.stderr || error?.message || "");
-    return {
-      hasAudio: /Audio:/i.test(stderr),
-    };
-  }
-}
-
-function buildNormalizedVideoFilter() {
-  return [
-    `scale=${config.video.width}:${config.video.height}:force_original_aspect_ratio=increase`,
-    `crop=${config.video.width}:${config.video.height}`,
-    `fps=${config.video.fps}`,
-    "format=yuv420p",
-  ].join(",");
-}
-
-async function normalizeVideoClip({ inputPath, outputPath, hasAudio }) {
-  await ensureDir(path.dirname(outputPath));
-  const args = ["-y", "-i", inputPath];
-  if (!hasAudio) {
-    args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
-  }
-  args.push(
-    "-map",
-    "0:v:0",
-    "-map",
-    hasAudio ? "0:a:0?" : "1:a:0",
-    "-vf",
-    buildNormalizedVideoFilter(),
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-pix_fmt",
-    "yuv420p",
-    "-c:a",
-    "aac",
-    "-ar",
-    "48000",
-    "-ac",
-    "2",
-    "-movflags",
-    "+faststart",
-  );
-  if (!hasAudio) {
-    args.push("-shortest");
-  }
-  args.push(outputPath);
-  await runCommand(config.ffmpegPath, args);
-}
-
-async function concatNormalizedVideos({ inputPaths, outputPath, workspaceDir }) {
-  const normalizedDir = path.join(workspaceDir, "normalized");
-  await ensureDir(normalizedDir);
-  const normalizedPaths = [];
-
-  for (let index = 0; index < inputPaths.length; index += 1) {
-    const inputPath = inputPaths[index];
-    const { hasAudio } = await inspectVideoStreams(inputPath);
-    const normalizedPath = path.join(normalizedDir, `${String(index + 1).padStart(2, "0")}.mp4`);
-    await normalizeVideoClip({
-      inputPath,
-      outputPath: normalizedPath,
-      hasAudio,
-    });
-    normalizedPaths.push(normalizedPath);
-  }
-
-  if (normalizedPaths.length === 1) {
-    await fs.copyFile(normalizedPaths[0], outputPath);
-    return;
-  }
-
-  const concatListPath = path.join(workspaceDir, "segments.txt");
-  await writeText(
-    concatListPath,
-    normalizedPaths.map((filePath) => `file '${filePath.replaceAll("'", "'\\''")}'`).join("\n"),
-  );
-  await concatSegments(concatListPath, outputPath);
-}
-
-async function burnSubtitles(videoPath, subtitlesPath, outputPath) {
-  const style =
-    "FontSize=18,PrimaryColour=&Hffffff&,OutlineColour=&H40000000&,BorderStyle=1,Outline=2,Shadow=0,MarginV=32";
-  await runCommand(config.ffmpegPath, [
-    "-y",
-    "-i",
-    videoPath,
-    "-vf",
-    `subtitles=${escapeSubtitlePath(subtitlesPath)}:force_style='${style}'`,
-    "-c:a",
-    "copy",
-    outputPath,
-  ]);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function readOptionalJson(filePath) {
   try {
     return await readJson(filePath);
   } catch {
     return null;
   }
-}
-
-async function loadManifest(projectId, project) {
-  const paths = getProjectPaths(projectId);
-  const manifest = (await readOptionalJson(paths.manifestPath)) || {
-    projectId,
-    projectName: project.name,
-    startedAt: new Date().toISOString(),
-    baseUrl: config.qiniu.baseUrl,
-    renderStrategy: {
-      mode: config.video.renderMode,
-      note: "支持静态关键帧合成和视频模型生成两条路径。",
-      plannedVideoModel: project.models.shotVideo,
-    },
-    stages: [],
-    outputs: {},
-  };
-  return manifest;
-}
-
-function upsertStageRecord(manifest, stage, model, output) {
-  const next = { stage, model, output, updatedAt: new Date().toISOString() };
-  manifest.stages = (manifest.stages || []).filter((item) => item.stage !== stage);
-  manifest.stages.push(next);
-}
-
-async function saveManifest(projectId, manifest) {
-  const paths = getProjectPaths(projectId);
-  await writeJson(paths.manifestPath, manifest);
-}
-
-async function saveModelMatrix(project, manifest) {
-  const paths = getProjectPaths(project.id);
-  await writeJson(paths.modelMatrixPath, {
-    provider: config.strategy.provider,
-    baseUrl: config.qiniu.baseUrl,
-    primary: {
-      adaptation: project.models.adaptation,
-      characters: project.models.characters,
-      storyboard: project.models.storyboard,
-      roleImage: project.models.roleImage,
-      shotImage: project.models.shotImage,
-      shotVideo: project.models.shotVideo,
-      voice: {
-        narrator: config.qiniu.voices.narrator,
-        female: config.qiniu.voices.female,
-        male: config.qiniu.voices.male,
-      },
-    },
-    comparisons: {
-      text: config.qiniu.compareModels.text,
-      image: config.qiniu.compareModels.image,
-    },
-    renderStrategy: manifest.renderStrategy,
-    recommendations: config.strategy.recommendations,
-  });
 }
 
 async function executeAdaptation(project, client, paths, manifest, onProgress) {
@@ -1902,75 +1486,6 @@ export async function renderAllSubjectReferences(projectId) {
   }
 }
 
-async function inferStageReadyFromArtifacts(projectId, stage) {
-  const paths = getProjectPaths(projectId);
-  if (stage === "adaptation") {
-    return Boolean(await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")));
-  }
-  if (stage === "characters") {
-    return Boolean(await readOptionalJson(path.join(paths.dirs.characters, "characters.json")));
-  }
-  if (stage === "storyboard") {
-    return Boolean(await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json")));
-  }
-  if (stage === "media") {
-    const workbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
-    return Boolean(workbench?.shots?.length);
-  }
-  return false;
-}
-
-function requiredModelsForStage(stage) {
-  return {
-    adaptation: ["adaptation", "characters"],
-    characters: ["characters"],
-    storyboard: ["storyboard"],
-    media: ["shotImage"],
-    output: [],
-    video: ["shotVideo"],
-  }[stage] || [];
-}
-
-function ensureStageModelsConfigured(project, stage) {
-  const missing = requiredModelsForStage(stage).filter((key) => !String(project.models?.[key] || "").trim());
-  if (!missing.length) {
-    return;
-  }
-  const labels = {
-    adaptation: "剧本模型",
-    characters: "主体分析模型",
-    storyboard: "分镜模型",
-    shotImage: "镜头图片模型",
-    shotVideo: "视频模型",
-  };
-  throw new Error(`当前阶段缺少模型配置：${missing.map((key) => labels[key] || key).join("、")}`);
-}
-
-export async function assertExecutable(project, stage) {
-  ensureStageModelsConfigured(project, stage);
-  const dependencies = {
-    adaptation: [],
-    characters: ["adaptation"],
-    storyboard: ["characters"],
-    media: ["storyboard"],
-    output: ["media"],
-    video: ["media"],
-  }[stage] || [];
-  for (const dependency of dependencies) {
-    if (project.stageState[dependency]?.status === "done") {
-      continue;
-    }
-    if (await inferStageReadyFromArtifacts(project.id, dependency)) {
-      project.stageState[dependency] = {
-        status: "done",
-        updatedAt: project.stageState[dependency]?.updatedAt || new Date().toISOString(),
-        error: null,
-      };
-      continue;
-    }
-    throw new Error(`请先完成 ${dependency} 阶段。`);
-  }
-}
 
 export async function runProjectStage(projectId, stage, options = {}) {
   const { onProgress } = options;

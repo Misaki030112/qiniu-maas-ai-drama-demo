@@ -1,4 +1,5 @@
-import { assertExecutable, runProjectStage } from "./project-pipeline.js";
+import { runProjectStage } from "./project-pipeline.js";
+import { assertExecutable } from "./stages/stage-requirements.js";
 import {
   createJob,
   markJobDone,
@@ -57,7 +58,7 @@ export async function enqueueProjectStageExecution(projectId, stage) {
     throw new Error("当前项目已有任务在执行中。");
   }
 
-  assertExecutable(project, stage);
+  await assertExecutable(project, stage);
 
   const job = await createJob(projectId, stage, {
     requestedStage: stage,
