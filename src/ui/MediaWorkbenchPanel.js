@@ -215,11 +215,11 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel
 
   return (
     <>
-      {capabilities.displayName?.startsWith("Kling") ? (
+      {capabilities.supports_mode_options?.length ? (
         <div className="studio-field">
           <span>模式</span>
           <div className="studio-option-grid studio-option-grid--wide">
-            {["std", "pro"].map((mode) => (
+            {capabilities.supports_mode_options.map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -739,26 +739,11 @@ export function MediaWorkbenchPanel({
                   当前模型支持首帧/尾帧控制。首尾帧是否可与额外参考图混用，取决于具体模型能力与接口限制。
                 </div>
               ) : null}
-              {["kling-v2-1", "kling-v2-5-turbo", "kling-v2-6"].includes(String(models.shotVideo || "")) ? (
-                <div className="studio-inline-note">
-                  当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1 或 Kling V3 Omni。
+              {capabilities.editor_notes.map((note) => (
+                <div key={note} className="studio-inline-note">
+                  {note}
                 </div>
-              ) : null}
-              {String(models.shotVideo || "") === "kling-v3" ? (
-                <div className="studio-inline-note">
-                  Kling V3 支持文生、单参考图生和首尾帧视频。若要同时使用多张参考图或参考视频，请切到 Kling V3 Omni。
-                </div>
-              ) : null}
-              {String(models.shotVideo || "").startsWith("viduq3-") ? (
-                <div className="studio-inline-note">
-                  Vidu Q3 当前按文档支持文生、单图生和首尾帧视频。当前工作台会优先使用 1 张参考图或 1 组首尾帧，不支持额外主体参考图混用。
-                </div>
-              ) : null}
-              {String(models.shotVideo || "").startsWith("sora-") ? (
-                <div className="studio-inline-note">
-                  Sora 2 支持参考图 + 文本生成视频。当前接入要求参考图是公网可访问 URL；若你现在在本地 localhost 上运行，需要先配置 `APP_BASE_URL` 或使用外部公网图片。
-                </div>
-              ) : null}
+              ))}
             </div>
             <label className="studio-field">
               <span>视频提示词</span>

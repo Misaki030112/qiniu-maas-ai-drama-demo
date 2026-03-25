@@ -11,6 +11,10 @@ const capabilityMatrix = {
     supports_duration_options: [4, 8, 12],
     supports_resolution_options: [],
     supports_audio_generation: false,
+    supports_mode_options: [],
+    editor_notes: [
+      "Sora 2 支持参考图 + 文本生成视频。当前接入要求参考图是公网可访问 URL；在本地 localhost 环境下请先配置 APP_BASE_URL 或使用外部公网图片。",
+    ],
   },
   "sora-2-pro": {
     displayName: "Sora 2 Pro",
@@ -24,6 +28,10 @@ const capabilityMatrix = {
     supports_duration_options: [4, 8, 12],
     supports_resolution_options: [],
     supports_audio_generation: false,
+    supports_mode_options: [],
+    editor_notes: [
+      "Sora 2 支持参考图 + 文本生成视频。当前接入要求参考图是公网可访问 URL；在本地 localhost 环境下请先配置 APP_BASE_URL 或使用外部公网图片。",
+    ],
   },
   "veo-3.1-fast-generate-001": {
     displayName: "Veo 3.1 Fast",
@@ -37,6 +45,8 @@ const capabilityMatrix = {
     supports_duration_options: [4, 6, 8],
     supports_resolution_options: ["720p", "1080p"],
     supports_audio_generation: true,
+    supports_mode_options: [],
+    editor_notes: [],
   },
   "veo-3.1-generate-001": {
     displayName: "Veo 3.1",
@@ -50,6 +60,8 @@ const capabilityMatrix = {
     supports_duration_options: [4, 6, 8],
     supports_resolution_options: ["720p", "1080p"],
     supports_audio_generation: true,
+    supports_mode_options: [],
+    editor_notes: [],
   },
   "kling-v2-1": {
     displayName: "Kling V2.1",
@@ -63,6 +75,10 @@ const capabilityMatrix = {
     supports_duration_options: [5, 10],
     supports_resolution_options: [],
     supports_audio_generation: false,
+    supports_mode_options: ["std", "pro"],
+    editor_notes: [
+      "当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1 或 Kling V3 Omni。",
+    ],
   },
   "kling-v2-5-turbo": {
     displayName: "Kling V2.5 Turbo",
@@ -76,6 +92,10 @@ const capabilityMatrix = {
     supports_duration_options: [5, 10],
     supports_resolution_options: [],
     supports_audio_generation: false,
+    supports_mode_options: ["std", "pro"],
+    editor_notes: [
+      "当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1 或 Kling V3 Omni。",
+    ],
   },
   "kling-v2-6": {
     displayName: "Kling V2.6",
@@ -89,6 +109,10 @@ const capabilityMatrix = {
     supports_duration_options: [5, 10],
     supports_resolution_options: [],
     supports_audio_generation: true,
+    supports_mode_options: ["std", "pro"],
+    editor_notes: [
+      "当前模型走首帧/尾帧模式，不接收额外主体参考图。若要使用多主体/参考图视频，请切到 Kling Video O1 或 Kling V3 Omni。",
+    ],
   },
   "kling-video-o1": {
     displayName: "Kling Video O1",
@@ -102,6 +126,8 @@ const capabilityMatrix = {
     supports_duration_options: [5, 10],
     supports_resolution_options: [],
     supports_audio_generation: false,
+    supports_mode_options: ["std", "pro"],
+    editor_notes: [],
   },
   "kling-v3": {
     displayName: "Kling V3",
@@ -115,6 +141,10 @@ const capabilityMatrix = {
     supports_duration_options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     supports_resolution_options: [],
     supports_audio_generation: true,
+    supports_mode_options: ["std", "pro"],
+    editor_notes: [
+      "Kling V3 支持文生、单参考图生和首尾帧视频。若要同时使用多张参考图或参考视频，请切到 Kling V3 Omni。",
+    ],
   },
   "kling-v3-omni": {
     displayName: "Kling V3 Omni",
@@ -128,6 +158,8 @@ const capabilityMatrix = {
     supports_duration_options: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     supports_resolution_options: [],
     supports_audio_generation: true,
+    supports_mode_options: ["std", "pro"],
+    editor_notes: [],
   },
   "viduq3-turbo": {
     displayName: "Vidu Q3 Turbo",
@@ -141,6 +173,10 @@ const capabilityMatrix = {
     supports_duration_options: [4, 5],
     supports_resolution_options: ["720p", "1080p"],
     supports_audio_generation: false,
+    supports_mode_options: [],
+    editor_notes: [
+      "Vidu Q3 当前按文档支持文生、单图生和首尾帧视频。当前工作台会优先使用 1 张参考图或 1 组首尾帧，不支持额外主体参考图混用。",
+    ],
   },
   "viduq3-pro": {
     displayName: "Vidu Q3 Pro",
@@ -154,6 +190,10 @@ const capabilityMatrix = {
     supports_duration_options: [4, 5],
     supports_resolution_options: ["720p", "1080p"],
     supports_audio_generation: false,
+    supports_mode_options: [],
+    editor_notes: [
+      "Vidu Q3 当前按文档支持文生、单图生和首尾帧视频。当前工作台会优先使用 1 张参考图或 1 组首尾帧，不支持额外主体参考图混用。",
+    ],
   },
 };
 
@@ -170,6 +210,8 @@ export function getVideoCapabilities(model) {
     supports_duration_options: [],
     supports_resolution_options: [],
     supports_audio_generation: false,
+    supports_mode_options: [],
+    editor_notes: [],
   };
 }
 

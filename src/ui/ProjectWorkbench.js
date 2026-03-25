@@ -19,45 +19,6 @@ const subjectKinds = [
   { id: "prop", label: "道具", key: "props" },
 ];
 
-const defaultModelOptions = {
-  adaptation: ["openai/gpt-5.4", "openai/gpt-5.4-mini", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324"],
-  characters: ["openai/gpt-5.4", "gemini-2.5-pro", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
-  storyboard: ["gemini-2.5-pro", "openai/gpt-5.4", "minimax/minimax-m2.5", "deepseek-v3-0324", "openai/gpt-5.4-mini"],
-  roleImage: [
-    "gemini-3.1-flash-image-preview",
-    "gemini-2.5-flash-image",
-    "imagen-4",
-    "gpt-image-1",
-    "minimax-image-01",
-    "kling-image-o1",
-    "kling-v2-new",
-    "kling-v1-5",
-  ],
-  shotImage: [
-    "gemini-3.1-flash-image-preview",
-    "gemini-2.5-flash-image",
-    "imagen-4",
-    "gpt-image-1",
-    "minimax-image-01",
-    "kling-image-o1",
-    "kling-v2-new",
-    "kling-v1-5",
-  ],
-  shotVideo: [
-    "veo-3.1-fast-generate-001",
-    "veo-3.1-generate-001",
-    "sora-2",
-    "sora-2-pro",
-    "kling-v2-5-turbo",
-    "kling-v2-6",
-    "kling-video-o1",
-    "kling-v3",
-    "kling-v3-omni",
-    "viduq3-turbo",
-    "viduq3-pro",
-  ],
-};
-
 const ratioOptions = [
   { value: "16:9", icon: "wide" },
   { value: "9:16", icon: "vertical" },
@@ -390,25 +351,41 @@ function StatusDot({ status }) {
   return <span className={`studio-status-dot ${status || "idle"}`} />;
 }
 
-function buildModelOptions(modelCatalog) {
-  if (!modelCatalog?.length) {
-    return defaultModelOptions;
-  }
+function uniqueStrings(items = []) {
+  return [...new Set(items.filter((item) => typeof item === "string" && item.trim()))];
+}
 
-  const byCapability = (capability, defaults) => {
+function buildFallbackModelOptions(currentModels = {}) {
+  return {
+    adaptation: uniqueStrings([currentModels.adaptation]),
+    characters: uniqueStrings([currentModels.characters]),
+    storyboard: uniqueStrings([currentModels.storyboard]),
+    roleImage: uniqueStrings([currentModels.roleImage]),
+    shotImage: uniqueStrings([currentModels.shotImage]),
+    shotVideo: uniqueStrings([currentModels.shotVideo]),
+  };
+}
+
+function buildModelOptions(modelCatalog, currentModels = {}) {
+  const fallback = buildFallbackModelOptions(currentModels);
+  const byCapability = (capability, currentValue) => {
     const items = modelCatalog
       .filter((item) => item.capabilities?.includes(capability))
       .map((item) => item.modelId);
-    return items.length ? items : defaults;
+    return uniqueStrings([currentValue, ...items]);
   };
 
+  if (!modelCatalog?.length) {
+    return fallback;
+  }
+
   return {
-    adaptation: byCapability("script", defaultModelOptions.adaptation),
-    characters: byCapability("subject_analysis", defaultModelOptions.characters),
-    storyboard: byCapability("storyboard", defaultModelOptions.storyboard),
-    roleImage: byCapability("subject_reference", defaultModelOptions.roleImage),
-    shotImage: byCapability("shot_image", defaultModelOptions.shotImage),
-    shotVideo: byCapability("video_generation", defaultModelOptions.shotVideo),
+    adaptation: byCapability("script", currentModels.adaptation),
+    characters: byCapability("subject_analysis", currentModels.characters),
+    storyboard: byCapability("storyboard", currentModels.storyboard),
+    roleImage: byCapability("subject_reference", currentModels.roleImage),
+    shotImage: byCapability("shot_image", currentModels.shotImage),
+    shotVideo: byCapability("video_generation", currentModels.shotVideo),
   };
 }
 
@@ -1185,7 +1162,7 @@ export function ProjectWorkbench({ projectId }) {
   }, [project?.id, project?.currentJob?.id, project?.currentJob?.status]);
 
   const currentKindConfig = subjectKinds.find((item) => item.id === subjectKind) || subjectKinds[0];
-  const modelOptions = useMemo(() => buildModelOptions(modelCatalog), [modelCatalog]);
+  const modelOptions = useMemo(() => buildModelOptions(modelCatalog, models), [modelCatalog, models]);
   const subjectItems = useMemo(
     () => charactersDraft?.[currentKindConfig.key] || [],
     [charactersDraft, currentKindConfig.key],

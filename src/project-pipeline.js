@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import { QiniuMaaSClient } from "./providers/qiniu-maas.js";
+import { createMaaSClient } from "./maas-client.js";
 import {
   buildAdaptationMessages,
   buildCharacterMessages,
@@ -42,6 +42,7 @@ import { createPipelineLogger } from "./pipeline-logger.js";
 import { getVideoCapabilities } from "./video-capabilities.js";
 import { buildVideoTaskRequest, resolveVideoSize } from "./providers/video-runtime.js";
 import { buildImageRequest, explainImageReferenceConstraint } from "./providers/image-runtime.js";
+import { inferModelFamily, MODEL_CATEGORY } from "./providers/model-classification.js";
 import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
 
 async function reportProgress(onProgress, progressText, payload = null) {
@@ -867,6 +868,7 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     throw new Error("未找到当前镜头。");
   }
   const capability = getVideoCapabilities(project.models.shotVideo);
+  const videoFamily = inferModelFamily(project.models.shotVideo, MODEL_CATEGORY.VIDEO);
   const logger = await createPipelineLogger({
     projectId: project.id,
     stage: "media",
@@ -879,7 +881,7 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
   const { selectedFrame } = extractSelectedShotMedia(shot);
   const referenceInputs = await buildMediaReferenceInputs(project.id, projectDetail, paths, shot);
   const videoReferenceInputs = (() => {
-    if (!project.models.shotVideo.startsWith("sora-")) {
+    if (videoFamily !== "sora-video") {
       return referenceInputs;
     }
     return [];
@@ -920,7 +922,7 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
     const firstSubjectReference = findSubjectReferenceAssets(projectDetail, shot.subject_refs || [])[0];
     return firstSubjectReference?.imagePath || firstSubjectReference?.path || "";
   })();
-  const normalizedSoraReference = project.models.shotVideo.startsWith("sora-") && selectedFrame?.path
+  const normalizedSoraReference = videoFamily === "sora-video" && selectedFrame?.path
     ? await (async () => {
         const [widthText, heightText] = resolveVideoSize(project.models.scriptRatio || "16:9").split("x");
         const safeShotId = shotId.replaceAll("/", "_");
@@ -1709,7 +1711,7 @@ export async function generateMediaShotImage(projectId, shotId) {
   const project = await readProject(projectId);
   const projectDetail = await readProjectDetail(projectId);
   const paths = await ensureProjectWorkspace(projectId);
-  const client = new QiniuMaaSClient(config.qiniu);
+  const client = createMaaSClient();
   const manifest = await loadManifest(projectId, project);
   return generateMediaShotImageInternal({ project, projectDetail, client, paths, manifest, shotId });
 }
@@ -1717,7 +1719,7 @@ export async function generateMediaShotImage(projectId, shotId) {
 export async function generateMediaShotAudio(projectId, shotId, options = {}) {
   const project = await readProject(projectId);
   const paths = await ensureProjectWorkspace(projectId);
-  const client = new QiniuMaaSClient(config.qiniu);
+  const client = createMaaSClient();
   const manifest = await loadManifest(projectId, project);
   return generateMediaShotAudioInternal({
     project,
@@ -1733,7 +1735,7 @@ export async function generateMediaShotVideo(projectId, shotId, options = {}) {
   const project = await readProject(projectId);
   const projectDetail = await readProjectDetail(projectId);
   const paths = await ensureProjectWorkspace(projectId);
-  const client = new QiniuMaaSClient(config.qiniu);
+  const client = createMaaSClient();
   const manifest = await loadManifest(projectId, project);
   return generateMediaShotVideoInternal({
     project,
@@ -1761,7 +1763,7 @@ export async function applyMediaShotAudioToVideo(projectId, shotId) {
 export async function regenerateSubjectReference(projectId, { kind, key }) {
   const project = await readProject(projectId);
   const paths = await ensureProjectWorkspace(projectId);
-  const client = new QiniuMaaSClient(config.qiniu);
+  const client = createMaaSClient();
   const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
   const payload = normalizeCharacterStagePayload(
     await readOptionalJson(path.join(paths.dirs.characters, "characters.json")),
@@ -1847,7 +1849,7 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
 export async function renderAllSubjectReferences(projectId) {
   const project = await readProject(projectId);
   const paths = await ensureProjectWorkspace(projectId);
-  const client = new QiniuMaaSClient(config.qiniu);
+  const client = createMaaSClient();
   const manifest = await loadManifest(projectId, project);
   const logger = await createPipelineLogger({
     projectId,
@@ -1953,7 +1955,7 @@ export async function runProjectStage(projectId, stage, options = {}) {
 
   try {
     const paths = await ensureProjectWorkspace(projectId);
-    const client = new QiniuMaaSClient(config.qiniu);
+    const client = createMaaSClient();
     const manifest = await loadManifest(projectId, project);
     const logger = await createPipelineLogger({
       projectId,

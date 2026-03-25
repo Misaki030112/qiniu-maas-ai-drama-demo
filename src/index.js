@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import { QiniuMaaSClient } from "./providers/qiniu-maas.js";
+import { createMaaSClient } from "./maas-client.js";
 import {
   buildAdaptationMessages,
   buildCharacterMessages,
@@ -304,7 +304,7 @@ async function run() {
 
   await writeText(path.join(dirs.input, "story.txt"), storyText);
 
-  const client = new QiniuMaaSClient(config.qiniu);
+  const client = createMaaSClient();
   const manifest = {
     runId,
     startedAt: new Date().toISOString(),
