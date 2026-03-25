@@ -82,11 +82,6 @@ export async function listModelCatalog(options = {}) {
     `,
   );
 
-  if (!result.rows.length) {
-    await refreshModelCatalog({ queryFn, schema: targetSchema });
-    return listModelCatalog({ queryFn, schema: targetSchema });
-  }
-
   return result.rows.map((row) => ({
     modelId: row.model_id,
     displayName: row.display_name,

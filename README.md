@@ -74,6 +74,8 @@ npm run db:init
 npm run dev
 ```
 
+模型列表只从数据库读取。`model_catalog` 为空时，工作台不会显示任何可选模型。
+
 打开：
 
 ```text

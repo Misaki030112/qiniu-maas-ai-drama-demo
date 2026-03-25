@@ -55,14 +55,12 @@ export const config = {
     marketplaceCatalogUrl:
       process.env.QINIU_MARKETPLACE_CATALOG_URL || "https://sufy.com/zh-CN/services/ai-inference/models",
     models: {
-      adaptation: process.env.QINIU_ADAPTATION_MODEL || "openai/gpt-5.4",
-      characters: process.env.QINIU_CHARACTER_MODEL || "gemini-2.5-pro",
-      storyboard: process.env.QINIU_STORYBOARD_MODEL || "gemini-2.5-pro",
-      roleImage:
-        process.env.QINIU_ROLE_IMAGE_MODEL || "imagen-4",
-      shotImage:
-        process.env.QINIU_SHOT_IMAGE_MODEL || "imagen-4",
-      shotVideo: process.env.QINIU_VIDEO_MODEL || "veo-3.1-fast-generate-001",
+      adaptation: process.env.QINIU_ADAPTATION_MODEL || "",
+      characters: process.env.QINIU_CHARACTER_MODEL || "",
+      storyboard: process.env.QINIU_STORYBOARD_MODEL || "",
+      roleImage: process.env.QINIU_ROLE_IMAGE_MODEL || "",
+      shotImage: process.env.QINIU_SHOT_IMAGE_MODEL || "",
+      shotVideo: process.env.QINIU_VIDEO_MODEL || "",
     },
     compareModels: {
       text: parseList(process.env.QINIU_TEXT_COMPARE_MODELS),

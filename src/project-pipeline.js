@@ -834,9 +834,12 @@ async function applyMediaShotAudioToVideoInternal({ project, paths, manifest, sh
     contentType: contentTypeFromFilePath(outputPath),
     generatedAt,
   });
+  const muxedModelLabel = [selectedVideo.model || project.models.shotVideo, "配音合成"]
+    .filter(Boolean)
+    .join(" / ");
   const asset = createVideoAsset({
     path: relativePath,
-    model: `${selectedVideo.model || project.models.shotVideo || "video"} / 配音合成`,
+    model: muxedModelLabel || "配音合成",
     prompt: selectedVideo.prompt || shot.video_prompt || shot.image_prompt || "",
     durationSec: selectedVideo.durationSec || Number(shot.duration_sec || 5),
     provider: "ffmpeg",
@@ -1626,7 +1629,7 @@ async function executeOutput(project, paths, manifest, onProgress) {
     },
   };
   manifest.completedAt = new Date().toISOString();
-  upsertStageRecord(manifest, "output", project.models.shotVideo || "selected-video-concat", "09-video/output.mp4");
+  upsertStageRecord(manifest, "output", "selected-shot-video-concat", "09-video/output.mp4");
 }
 
 async function pollVideoResult(client, model, provider, id) {
