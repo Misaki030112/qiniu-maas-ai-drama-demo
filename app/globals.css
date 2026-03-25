@@ -1624,6 +1624,11 @@ audio {
   gap: 8px;
 }
 
+.studio-reference-tile--active .studio-reference-tile__preview {
+  border-color: rgba(147, 239, 59, 0.48);
+  box-shadow: 0 0 0 1px rgba(147, 239, 59, 0.22) inset;
+}
+
 .studio-reference-upload {
   position: relative;
   width: 132px;

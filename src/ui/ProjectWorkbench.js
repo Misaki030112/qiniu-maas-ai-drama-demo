@@ -63,6 +63,10 @@ function canRunStage(project, stage, storyText) {
   return (stageDeps[stage] || []).every((dependency) => project?.stageState?.[dependency]?.status === "done");
 }
 
+function findCurrentReference(items = []) {
+  return items.find((item) => item?.isCurrent) || items[0] || null;
+}
+
 function nextTabFromProject(project) {
   if (!project) {
     return "script";
@@ -1215,6 +1219,7 @@ export function ProjectWorkbench({ projectId }) {
   const currentReferenceHistory = currentSubject
     ? currentReferences.filter((item) => item.key === currentSubject.name)
     : [];
+  const currentReference = findCurrentReference(currentReferenceHistory);
   const storyboardGroups = storyboardDraft?.groups || [];
   const storyboardItems = storyboardGroups.flatMap((group) => (group.items || []).map((item) => ({ ...item, group_id: group.group_id })));
   const currentStoryboardItem = storyboardItems.find((item) => item.item_id === selectedStoryboardItemId) || null;
@@ -1489,6 +1494,36 @@ export function ProjectWorkbench({ projectId }) {
     setPreviewAsset({
       url: reference.url,
       title: reference.name || defaultTitle,
+    });
+  }
+
+  function setCurrentSubjectReference(reference) {
+    if (!reference?.path || !currentSubject?.name) {
+      return;
+    }
+    startTransition(async () => {
+      try {
+        setLocalBusyText("正在切换当前主体图");
+        const res = await fetch(`/api/projects/${projectId}/subjects/current`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: subjectKind,
+            key: currentSubject.name,
+            path: reference.path,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || "切换当前主体图失败");
+        }
+        applyProjectData(data, { preserveStoryText: true });
+        setMessage("当前主体图已切换");
+      } catch (error) {
+        setMessage(error.message || "切换失败");
+      } finally {
+        setLocalBusyText("");
+      }
     });
   }
 
@@ -2284,14 +2319,14 @@ export function ProjectWorkbench({ projectId }) {
                 {currentSubject ? (
                   <div className="studio-detail-editor">
                     <span className="studio-section-label">{currentSubject.name}</span>
-                    {currentReferences.find((item) => item.key === currentSubject.name)?.url ? (
+                    {currentReference?.url ? (
                       <button
                         type="button"
                         className="studio-current-preview"
-                        onClick={() => openPreview(currentReferences.find((item) => item.key === currentSubject.name), currentSubject.name)}
+                        onClick={() => openPreview(currentReference, currentSubject.name)}
                       >
-                        <img src={currentReferences.find((item) => item.key === currentSubject.name).url} alt={currentSubject.name} />
-                        <span>点击查看大图</span>
+                        <img src={currentReference.url} alt={currentSubject.name} />
+                        <span>查看当前大图</span>
                       </button>
                     ) : null}
                     {currentReferenceHistory.length ? (
@@ -2299,14 +2334,22 @@ export function ProjectWorkbench({ projectId }) {
                         <span>已生成版本</span>
                         <div className="studio-reference-grid">
                           {currentReferenceHistory.map((item, index) => (
-                            <div key={item.path || item.url || `${item.key}-${index}`} className="studio-reference-tile">
-                              <button type="button" className="studio-reference-tile__preview" onClick={() => openPreview(item, item.name || currentSubject.name)}>
+                            <div
+                              key={item.path || item.url || `${item.key}-${index}`}
+                              className={item.isCurrent ? "studio-reference-tile studio-reference-tile--active" : "studio-reference-tile"}
+                            >
+                              <button
+                                type="button"
+                                className="studio-reference-tile__preview"
+                                onClick={() => setCurrentSubjectReference(item)}
+                              >
                                 <img src={item.url} alt={item.name || currentSubject.name} />
                               </button>
                               <div className="studio-reference-tile__actions">
-                                <button type="button" onClick={() => openPreview(item, item.name || currentSubject.name)}>
-                                  {index === 0 ? "当前图" : "查看"}
+                                <button type="button" onClick={() => setCurrentSubjectReference(item)} disabled={item.isCurrent}>
+                                  {item.isCurrent ? "当前图" : "设为当前"}
                                 </button>
+                                <button type="button" onClick={() => openPreview(item, item.name || currentSubject.name)}>查看</button>
                                 <button type="button" disabled>
                                   {formatLogTime(item.generatedAt)}
                                 </button>

@@ -155,6 +155,13 @@ function referenceTimeValue(item) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function referenceSortValue(a, b) {
+  if (Boolean(a?.isCurrent) !== Boolean(b?.isCurrent)) {
+    return a?.isCurrent ? -1 : 1;
+  }
+  return referenceTimeValue(b) - referenceTimeValue(a);
+}
+
 async function assetExists(projectId, item) {
   return projectArtifactExists(projectId, item);
 }
@@ -952,7 +959,7 @@ export async function readProjectDetail(projectId) {
       publicUrl: item.publicUrl || "",
     }),
   }))
-    .sort((a, b) => referenceTimeValue(b) - referenceTimeValue(a));
+    .sort(referenceSortValue);
   const roleReferences = subjectReferences.filter((item) => item.kind === "character");
   const sceneReferences = subjectReferences.filter((item) => item.kind === "scene");
   const propReferences = subjectReferences.filter((item) => item.kind === "prop");

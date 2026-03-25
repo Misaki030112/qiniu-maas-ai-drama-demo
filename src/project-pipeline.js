@@ -311,7 +311,26 @@ function findSubjectReferenceHistory(manifest, kind, key) {
   const list = manifest?.subjectReferences || manifest?.roleReferences || [];
   return list
     .filter((item) => item?.kind === kind && item?.key === key && item?.path)
-    .sort((a, b) => Date.parse(b.generatedAt || "") - Date.parse(a.generatedAt || ""));
+    .sort((a, b) => {
+      if (Boolean(a?.isCurrent) !== Boolean(b?.isCurrent)) {
+        return a?.isCurrent ? -1 : 1;
+      }
+      return Date.parse(b.generatedAt || "") - Date.parse(a.generatedAt || "");
+    });
+}
+
+function withCurrentSubjectReference(items, nextReference) {
+  const currentKey = `${nextReference.kind}:${nextReference.key}`;
+  const currentPath = nextReference.path;
+  return [
+    {
+      ...nextReference,
+      isCurrent: true,
+    },
+    ...items
+      .filter((item) => item?.path !== currentPath)
+      .map((item) => (`${item?.kind}:${item?.key}` === currentKey ? { ...item, isCurrent: false } : item)),
+  ];
 }
 
 function findSubjectReferenceAssets(projectDetail, refs = []) {
@@ -1130,7 +1149,11 @@ async function renderAllSubjectReferencesForProject(project, client, paths, mani
     }));
   }
   const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
-  manifest.subjectReferences = [...subjectReferences, ...existingReferences];
+  let nextReferences = [...existingReferences];
+  for (const item of subjectReferences) {
+    nextReferences = withCurrentSubjectReference(nextReferences, item);
+  }
+  manifest.subjectReferences = nextReferences;
   manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
   manifest.outputs.roleReference = "04-role-reference";
   return payload;
@@ -1471,7 +1494,7 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
     });
 
     const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
-    manifest.subjectReferences = [nextReference, ...existingReferences];
+    manifest.subjectReferences = withCurrentSubjectReference(existingReferences, nextReference);
     manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
     await saveManifest(projectId, manifest);
     await saveModelMatrix(project, manifest);
@@ -1556,6 +1579,20 @@ export async function renderAllSubjectReferences(projectId) {
     });
     throw error;
   }
+}
+
+export async function selectSubjectReference(projectId, { kind, key, path: referencePath }) {
+  const project = await readProject(projectId);
+  const manifest = await loadManifest(projectId, project);
+  const existingReferences = manifest.subjectReferences || manifest.roleReferences || [];
+  const nextReference = existingReferences.find((item) => item?.kind === kind && item?.key === key && item?.path === referencePath);
+  if (!nextReference) {
+    throw new Error("未找到要设为当前的主体图片。");
+  }
+  manifest.subjectReferences = withCurrentSubjectReference(existingReferences, nextReference);
+  manifest.roleReferences = manifest.subjectReferences.filter((item) => item.kind === "character");
+  await saveManifest(projectId, manifest);
+  return readProjectDetail(projectId);
 }
 
 
