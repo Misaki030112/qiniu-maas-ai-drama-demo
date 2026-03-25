@@ -59,11 +59,19 @@ CREATE TABLE IF NOT EXISTS ${schema}.model_catalog (
   model_id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
   provider TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'text',
+  family TEXT NOT NULL DEFAULT 'chat-completions',
   capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
   source TEXT NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE ${schema}.model_catalog
+  ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'text';
+
+ALTER TABLE ${schema}.model_catalog
+  ADD COLUMN IF NOT EXISTS family TEXT NOT NULL DEFAULT 'chat-completions';
 
 COMMENT ON SCHEMA ${schema} IS '点众 AI 真人剧 Demo 业务数据';
 
@@ -93,6 +101,8 @@ COMMENT ON TABLE ${schema}.model_catalog IS '模型目录表';
 COMMENT ON COLUMN ${schema}.model_catalog.model_id IS '模型ID';
 COMMENT ON COLUMN ${schema}.model_catalog.display_name IS '模型展示名称';
 COMMENT ON COLUMN ${schema}.model_catalog.provider IS '模型提供方';
+COMMENT ON COLUMN ${schema}.model_catalog.category IS '模型主分类：text/image/video/speech';
+COMMENT ON COLUMN ${schema}.model_catalog.family IS '模型适配族';
 COMMENT ON COLUMN ${schema}.model_catalog.capabilities IS '模型能力标签';
 COMMENT ON COLUMN ${schema}.model_catalog.source IS '模型信息来源';
 COMMENT ON COLUMN ${schema}.model_catalog.metadata IS '模型附加信息';

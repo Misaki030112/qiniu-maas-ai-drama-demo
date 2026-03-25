@@ -10,7 +10,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint src --ext .js"
+    "lint": "eslint src --ext .js",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",

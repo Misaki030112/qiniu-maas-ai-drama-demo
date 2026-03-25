@@ -1,4 +1,8 @@
-import { config } from "../config.js";
+import { buildDefaultVideoRequest } from "./video/default.js";
+import { buildKlingVideoRequest } from "./video/kling.js";
+import { buildSoraVideoRequest } from "./video/sora.js";
+import { buildVeoStatusRequest, buildVeoVideoRequest } from "./video/veo.js";
+import { buildViduStatusRequest, buildViduVideoRequest } from "./video/vidu.js";
 
 export function normalizeVideoSeconds(model, seconds) {
   const value = Math.max(3, Math.min(15, Math.round(seconds)));
@@ -34,95 +38,6 @@ export function resolveVideoSize(aspectRatio = "16:9") {
   }[aspectRatio] || "1280x720";
 }
 
-function toImageListEntry(buffer, type = "") {
-  if (!buffer) {
-    return null;
-  }
-  return type
-    ? {
-        image: buffer.toString("base64"),
-        type,
-      }
-    : {
-        image: buffer.toString("base64"),
-      };
-}
-
-function toReferenceEntry(item) {
-  if (!item) {
-    return null;
-  }
-  if (item.base64) {
-    return {
-      image: item.base64,
-    };
-  }
-  return null;
-}
-
-function bufferToDataUri(buffer, mimeType = "image/png") {
-  if (!buffer) {
-    return "";
-  }
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
-function isPublicHttpUrl(value) {
-  try {
-    const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol)) {
-      return false;
-    }
-    const host = url.hostname.toLowerCase();
-    return !["localhost", "127.0.0.1", "0.0.0.0"].includes(host);
-  } catch {
-    return false;
-  }
-}
-
-function toPublicReferenceUrl(item) {
-  if (!item) {
-    return "";
-  }
-  if (item.publicUrl && isPublicHttpUrl(item.publicUrl)) {
-    return item.publicUrl;
-  }
-  if (item.url && isPublicHttpUrl(item.url)) {
-    return item.url;
-  }
-  if (item.url && item.url.startsWith("/") && config.appBaseUrl) {
-    const resolved = new URL(item.url, config.appBaseUrl).href;
-    if (isPublicHttpUrl(resolved)) {
-      return resolved;
-    }
-  }
-  return "";
-}
-
-function toPublicOrInlineReference(item) {
-  if (!item) {
-    return "";
-  }
-  const publicUrl = toPublicReferenceUrl(item);
-  if (publicUrl) {
-    return publicUrl;
-  }
-  if (item.dataUri) {
-    return item.dataUri;
-  }
-  if (item.base64) {
-    return `data:image/png;base64,${item.base64}`;
-  }
-  return "";
-}
-
-function normalizeViduResolution(aspectRatio = "16:9", resolution = "") {
-  if (resolution) {
-    return resolution;
-  }
-  return aspectRatio === "9:16" ? "720p" : "1080p";
-}
-
 export function buildVideoTaskRequest({
   model,
   prompt,
@@ -136,175 +51,90 @@ export function buildVideoTaskRequest({
   resolution = "",
 }) {
   if (model.startsWith("viduq3-")) {
-    const tier = model.endsWith("-pro") ? "pro" : "turbo";
-    const firstReference = imageBuffer
-      ? bufferToDataUri(imageBuffer)
-      : referenceImages.map(toPublicOrInlineReference).find(Boolean) || "";
-    const tailReference = lastFrameBuffer ? bufferToDataUri(lastFrameBuffer) : "";
-    const duration = normalizeVideoSeconds(model, seconds);
-    const resolvedResolution = normalizeViduResolution(aspectRatio, resolution);
-    if (firstReference && tailReference) {
-      return {
-        provider: "vidu",
-        endpoint: `/queue/fal-ai/vidu/q3/start-end-to-video/${tier}`,
-        body: {
-          prompt,
-          start_image_url: firstReference,
-          end_image_url: tailReference,
-          duration,
-          resolution: resolvedResolution,
-          movement_amplitude: "auto",
-          watermark: false,
-        },
-      };
-    }
-    if (firstReference) {
-      return {
-        provider: "vidu",
-        endpoint: `/queue/fal-ai/vidu/q3/image-to-video/${tier}`,
-        body: {
-          prompt,
-          image_url: firstReference,
-          duration,
-          resolution: resolvedResolution,
-          movement_amplitude: "auto",
-          watermark: false,
-        },
-      };
-    }
-    return {
-      provider: "vidu",
-      endpoint: `/queue/fal-ai/vidu/q3/text-to-video/${tier}`,
-      body: {
-        prompt,
-        duration,
-        resolution: resolvedResolution,
-        movement_amplitude: "auto",
-      },
-    };
+    return buildViduVideoRequest({
+      model,
+      prompt,
+      imageBuffer,
+      lastFrameBuffer,
+      referenceImages,
+      seconds,
+      aspectRatio,
+      resolution,
+      normalizeVideoSeconds,
+    });
   }
 
   if (model.startsWith("veo-")) {
-    const instance = {
+    return buildVeoVideoRequest({
+      model,
       prompt,
-      image: imageBuffer
-        ? {
-            bytesBase64Encoded: imageBuffer.toString("base64"),
-            mimeType: "image/png",
-          }
-        : undefined,
+      imageBuffer,
+      lastFrameBuffer,
+      seconds,
       aspectRatio,
-    };
-    if (lastFrameBuffer) {
-      instance.lastFrame = {
-        bytesBase64Encoded: lastFrameBuffer.toString("base64"),
-        mimeType: "image/png",
-      };
-    }
-    const parameters = {
-      durationSeconds: normalizeVideoSeconds(model, seconds),
-      sampleCount: 1,
-      generateAudio: Boolean(enableAudio),
-    };
-    if (resolution) {
-      parameters.resolution = resolution;
-    }
-    return {
-      provider: "veo",
-      endpoint: "/videos/generations",
-      body: {
-        model,
-        instances: [instance],
-        parameters,
-      },
-    };
+      enableAudio,
+      resolution,
+      normalizeVideoSeconds,
+    });
   }
-
-  const body = {
-    model,
-    prompt,
-    seconds: String(normalizeVideoSeconds(model, seconds)),
-    size: resolution || resolveVideoSize(aspectRatio),
-  };
 
   if (imageBuffer || lastFrameBuffer || referenceImages.length) {
     if (model.startsWith("sora-")) {
-      const inputReference = referenceImages.map(toPublicReferenceUrl).find(Boolean);
-      if (!inputReference) {
-        throw new Error("Sora 2 支持参考图+提示词生成视频，但当前需要公网可访问的图片 URL。请使用公网参考图，或为项目配置 APP_BASE_URL 后再使用故事板素材。");
-      }
-      body.input_reference = inputReference;
-      return {
-        provider: "openai",
-        endpoint: "/videos",
-        body,
-      };
+      return buildSoraVideoRequest({
+        model,
+        prompt,
+        referenceImages,
+        seconds,
+        aspectRatio,
+        resolution,
+        resolveVideoSize,
+        normalizeVideoSeconds,
+      });
     }
 
     if (model.startsWith("kling-")) {
-      body.mode = mode || "std";
-      if (model === "kling-video-o1") {
-        const imageList = [
-          imageBuffer ? toImageListEntry(imageBuffer, "first_frame") : null,
-          lastFrameBuffer ? toImageListEntry(lastFrameBuffer, "end_frame") : null,
-          ...referenceImages.map(toReferenceEntry).filter(Boolean),
-        ].filter(Boolean);
-        if (!imageList.length) {
-          throw new Error(`模型 ${model} 缺少有效参考素材。`);
-        }
-        body.image_list = imageList;
-      } else if (model === "kling-v3-omni") {
-        const imageList = [
-          imageBuffer ? toImageListEntry(imageBuffer, "first_frame") : null,
-          ...referenceImages.map(toReferenceEntry).filter(Boolean),
-        ].filter(Boolean);
-        if (lastFrameBuffer) {
-          // Kling V3 Omni allows at most two images total when using an end frame.
-          // Prefer the explicit first frame; drop extra auxiliary references instead of failing.
-          if (imageList.length > 1) {
-            imageList.splice(1);
-          }
-          imageList.push(toImageListEntry(lastFrameBuffer, "end_frame"));
-        }
-        if (!imageList.length) {
-          throw new Error(`模型 ${model} 缺少有效参考素材。`);
-        }
-        body.image_list = imageList;
-      } else {
-        if (imageBuffer) {
-          body.input_reference = imageBuffer.toString("base64");
-        }
-        if (lastFrameBuffer) {
-          body.image_tail = lastFrameBuffer.toString("base64");
-        }
-        if (!body.input_reference && referenceImages.length) {
-          const fallbackReference = referenceImages.find((item) => item?.base64)?.base64 || "";
-          if (fallbackReference) {
-            body.input_reference = fallbackReference;
-          }
-        }
-        if (!body.input_reference && !body.image_tail) {
-          throw new Error(`模型 ${model} 缺少有效参考素材。`);
-        }
-      }
-
-      if (enableAudio && ["kling-v2-6", "kling-v3", "kling-v3-omni"].includes(model)) {
-        body.sound = "on";
-      }
-      return {
-        provider: "openai",
-        endpoint: "/videos",
-        body,
-      };
+      return buildKlingVideoRequest({
+        model,
+        prompt,
+        imageBuffer,
+        lastFrameBuffer,
+        referenceImages,
+        seconds,
+        aspectRatio,
+        mode,
+        enableAudio,
+        resolution,
+        resolveVideoSize,
+        normalizeVideoSeconds,
+      });
     }
   } else if (["kling-v2-1"].includes(model)) {
     throw new Error(`${model} 仅支持图生视频和首尾帧视频，请先提供首帧或参考图。`);
   }
 
+  return buildDefaultVideoRequest({
+    model,
+    prompt,
+    seconds,
+    aspectRatio,
+    resolution,
+    resolveVideoSize,
+    normalizeVideoSeconds,
+  });
+}
+
+export function buildVideoStatusRequest({ provider, id }) {
+  if (provider === "veo") {
+    return buildVeoStatusRequest(id);
+  }
+  if (provider === "vidu") {
+    return buildViduStatusRequest(id);
+  }
   return {
     provider: "openai",
-    endpoint: "/videos",
-    body,
+    method: "GET",
+    endpoint: `/videos/${id}`,
+    errorFallback: "Video task query failed",
   };
 }
 
