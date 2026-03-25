@@ -71,6 +71,10 @@ function buildAliyunBaseUrl() {
   return `https://${bucket}.${endpoint}`;
 }
 
+function buildWorkspaceArtifactPath(projectId, relativePath) {
+  return path.join(config.projectWorkspaceRoot, projectId, normalizeKeySegment(relativePath));
+}
+
 function isAliyunOssEnabled() {
   const { accessKeyId, accessKeySecret, bucket, endpoint } = config.objectStorage.aliyun;
   return truthy(config.objectStorage.enabled) && Boolean(accessKeyId && accessKeySecret && bucket && endpoint);
@@ -158,35 +162,63 @@ export async function persistProjectArtifact({
   stage = "",
 }) {
   assertAliyunOssEnabled();
-  const upload = await uploadToAliyunOss({ projectId, relativePath, buffer, contentType });
-  const artifact = await saveProjectBinaryArtifact({
-    projectId,
-    artifactPath: relativePath,
-    contentType,
-    publicUrl: upload.publicUrl,
-    storageProvider: "aliyun-oss",
-    sizeBytes: buffer.length,
-    stage,
-    metadata: {
-      ...metadata,
-      generatedAt: generatedAt || metadata.generatedAt || "",
-      objectKey: upload.objectKey,
-      originalPath: absolutePath || "",
-    },
-  });
+  const workspacePath = absolutePath || buildWorkspaceArtifactPath(projectId, relativePath);
 
-  return {
-    path: relativePath,
-    url: buildArtifactUrl(projectId, relativePath, generatedAt),
-    publicUrl: resolveArtifactPublicUrl({
+  try {
+    const upload = await uploadToAliyunOss({ projectId, relativePath, buffer, contentType });
+    const artifact = await saveProjectBinaryArtifact({
       projectId,
-      relativePath,
-      generatedAt,
-      publicUrl: artifact.publicUrl,
-    }),
-    storageProvider: artifact.storageProvider,
-    contentType,
-  };
+      artifactPath: relativePath,
+      contentType,
+      publicUrl: upload.publicUrl,
+      storageProvider: "aliyun-oss",
+      sizeBytes: buffer.length,
+      stage,
+      metadata: {
+        ...metadata,
+        generatedAt: generatedAt || metadata.generatedAt || "",
+        objectKey: upload.objectKey,
+        originalPath: absolutePath || "",
+      },
+    });
+
+    if (workspacePath) {
+      await fs.rm(workspacePath, { force: true }).catch(() => {});
+    }
+
+    return {
+      path: relativePath,
+      url: buildArtifactUrl(projectId, relativePath, generatedAt),
+      publicUrl: resolveArtifactPublicUrl({
+        projectId,
+        relativePath,
+        generatedAt,
+        publicUrl: artifact.publicUrl,
+      }),
+      storageProvider: artifact.storageProvider,
+      contentType,
+    };
+  } catch (error) {
+    await ensureDir(path.dirname(workspacePath));
+    await fs.writeFile(workspacePath, buffer);
+    await saveProjectBinaryArtifact({
+      projectId,
+      artifactPath: relativePath,
+      contentType,
+      publicUrl: "",
+      storageProvider: "local-fallback",
+      sizeBytes: buffer.length,
+      stage,
+      metadata: {
+        ...metadata,
+        generatedAt: generatedAt || metadata.generatedAt || "",
+        localFallbackPath: workspacePath,
+        originalPath: absolutePath || "",
+        uploadError: error.message,
+      },
+    });
+    throw new Error(`上传 OSS 失败，文件已保留到本地临时目录: ${workspacePath}。${error.message}`);
+  }
 }
 
 export async function readProjectArtifactBuffer({ projectId, relativePath, publicUrl = "" }) {
@@ -203,6 +235,18 @@ export async function readProjectArtifactBuffer({ projectId, relativePath, publi
     return {
       buffer: Buffer.from(artifact.bodyText, "utf8"),
       contentType: artifact.contentType || "text/plain; charset=utf-8",
+    };
+  }
+  if (artifact?.metadata?.localFallbackPath) {
+    return {
+      buffer: await fs.readFile(artifact.metadata.localFallbackPath),
+      contentType: artifact.contentType || effectiveContentType,
+    };
+  }
+  if (artifact?.metadata?.legacyLocalPath) {
+    return {
+      buffer: await fs.readFile(artifact.metadata.legacyLocalPath),
+      contentType: artifact.contentType || effectiveContentType,
     };
   }
 
