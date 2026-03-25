@@ -3,6 +3,7 @@ output/runs
 output/projects
 output/test-reports
 .data
+.tmp
 .next
 .DS_Store
 .env
