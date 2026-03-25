@@ -200,7 +200,7 @@ function buildFrameChoiceOptions(shot) {
 
 function buildFirstFrameChoiceOptions(shot) {
   return [
-    { value: "", label: "默认使用当前静帧" },
+    { value: "", label: "不使用首帧" },
     ...(shot.frame_assets || []).map((item, index) => ({
       value: item.id,
       label: `静帧 ${index + 1}`,
@@ -344,18 +344,24 @@ function VideoCapabilityOptions({ shot, capabilities, onPatch, currentVideoModel
         <FrameChoiceGrid
           title="首帧图"
           options={firstFrameOptions}
-          selectedValue={resolveFrameOptionValueByPath(firstFrameOptions, shot.video_options?.firstFramePath || "")}
+          selectedValue={
+            shot.video_options?.useFirstFrame === false
+              ? ""
+              : resolveFrameOptionValueByPath(firstFrameOptions, shot.video_options?.firstFramePath || "")
+          }
           onSelect={(option) => onPatch({
             video_options: {
               ...(shot.video_options || {}),
-              useFirstFrame: true,
+              useFirstFrame: Boolean(option?.value),
               firstFramePath: option?.path || "",
               firstFrameLabel: option?.value ? option.label : "",
             },
           })}
-          note={shot.video_options?.firstFrameLabel
+          note={shot.video_options?.useFirstFrame === false
+            ? "当前不使用首帧。"
+            : shot.video_options?.firstFrameLabel
             ? `当前首帧：${shot.video_options.firstFrameLabel}`
-            : "默认使用当前选中的静帧作为首帧。"}
+            : "当前未显式指定首帧，可用下方快捷按钮或参考图指定。"}
         />
       ) : null}
 
@@ -834,6 +840,21 @@ export function MediaWorkbenchPanel({
                       disabled={!currentFrame}
                     >
                       当前静帧作首帧
+                    </button>
+                  ) : null}
+                  {capabilities.supports_first_frame ? (
+                    <button
+                      type="button"
+                      onClick={() => patchCurrentShot({
+                        video_options: {
+                          ...(currentShot.video_options || {}),
+                          useFirstFrame: false,
+                          firstFramePath: "",
+                          firstFrameLabel: "",
+                        },
+                      })}
+                    >
+                      不使用首帧
                     </button>
                   ) : null}
                   {capabilities.supports_last_frame ? (
