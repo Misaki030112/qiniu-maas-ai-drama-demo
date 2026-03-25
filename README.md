@@ -1,135 +1,210 @@
-# 点众 AI 真人剧 Demo
+# AI 漫剧工作站
 
-围绕“点众科技 AI 漫剧/真人剧”的业务链路，构建一个最小可闭环 demo：
+一个面向内容团队的 AI 漫剧一站式工作站。
 
-先创建项目，再输入一段剧情文本，按阶段依次完成剧情改编、角色设定、角色首图、分镜、画面生成、配音、字幕和输出合成，并保留每一步的中间结果。
+目标不是做“单次脚本调用 demo”，而是把故事输入、剧本改编、角色设定、分镜、画面、配音、视频生成、成片输出放进同一个项目工作台里，让每一步都有结果、上下文和可回看记录。
 
-## 为什么这样设计
+当前版本只支持接入七牛云 MaaS。
 
-- 业务层只描述“当前节点需要什么能力”，不直接绑死某个模型。
-- 七牛/Sufy 大模型服务作为统一推理入口，文本、图像、语音都通过同一个 provider 管理。
-- 每个节点都落盘，方便导师回看“用了哪个模型、输入是什么、输出效果怎样”。
+## 产品定位
 
-## 当前实现
+- 面向“AI 漫剧”生产链路，而不是通用聊天应用。
+- 面向项目制协作，而不是一次性 run 完就结束的脚本。
+- 面向可回看、可重试、可替换模型的工作流，而不是黑盒生成。
 
-- 前端工作台：`Next.js App Router`
-- 项目管理：左侧项目栏 + 项目详情工作台
-- 文本节点：`/v1/chat/completions`
-- 画面节点：`/v1/images/generations`
-- 语音节点：`/v1/voice/tts`
-- 视频合成：本地 `ffmpeg-static`
-- 阶段执行：项目内按阶段递进执行，而不是整条链路一把执行
+## 当前能力
 
-说明：
+- 项目工作台：创建项目、保存故事文本、按阶段推进。
+- 文本阶段：剧情改编、角色设定、分镜生成。
+- 图片阶段：角色参考图、镜头图、带参考图生图。
+- 语音阶段：镜头配音、音频预览。
+- 视频阶段：按模型能力生成镜头视频，支持部分首帧、尾帧、参考图模式。
+- 输出阶段：本地合成、字幕、音视频资产管理。
+- 模型目录：基于七牛云 MaaS MCP / OAS 种子写入数据库，不再运行时在线抓取。
 
-- 视频模型目前还没有接通。
-- 当前只能输出“角色首图/镜头图 + 配音 + 字幕 + 合成”的静态镜头结果，用来验证前置链路是否跑通。
-- 这不是成片，也不应该被当成成片对外表述。
+## 当前边界
 
-## 快速运行
+- 当前只维护七牛云 MaaS 接入，不承诺其他 provider。
+- 不同模型是否可用，取决于你的七牛账户开通情况和额度。
+- 视频链路已经接入，但具体可用模型、分辨率、音频能力仍受上游接口约束。
+- `eslint` 目前没有装进仓库，`npm run lint` 不能作为准入项。
+
+## 技术结构
+
+- 前端：Next.js App Router
+- 后端：Next.js Route Handlers
+- 数据库：PostgreSQL
+- 本地合成：ffmpeg-static
+- 可选对象存储：阿里云 OSS
+- 模型接入层：按文本 / 语音 / 生图 / 视频拆分 adapter
+
+关键目录：
+
+- `app/`: 页面和 API
+- `src/project-pipeline.js`: 项目执行编排
+- `src/providers/`: 模型调用适配层
+- `src/model-catalog.js`: 模型目录入库与读取
+- `src/model-catalog-seed.js`: 七牛 MaaS 模型种子
+- `test/`: 按模型家族拆分的集成测试
+
+## 模型接入层
+
+当前模型调用层已经按能力拆分：
+
+- 文本：`src/providers/text-runtime.js`
+- 语音：`src/providers/speech-runtime.js`
+- 图片：`src/providers/image-runtime.js` 和 `src/providers/image/*`
+- 视频：`src/providers/video-runtime.js` 和 `src/providers/video/*`
+- 公共 HTTP / 错误处理：`src/providers/runtime-http.js`
+- 模型分类：`src/providers/model-classification.js`
+
+设计原则：
+
+- 业务层不直接拼 endpoint。
+- 每个模型家族有单独 adapter。
+- 通用 transport、错误归一化、请求发送下沉到公共层。
+- 模型目录按 `category / family / capabilities` 管理。
+
+## 快速开始
 
 ```bash
 npm install
 cp .env.example .env
+npm run db:init
 npm run dev
 ```
 
 打开：
 
-```bash
-[http://localhost:3000/projects](http://localhost:3000/projects)
+```text
+http://localhost:3000/projects
 ```
 
-旧的 CLI 方式仍然保留：
+保留了旧 CLI 入口，便于跑离线链路：
 
 ```bash
 npm run demo
 ```
 
-项目工作台的主要结构：
+## 必要环境变量
 
-- `01-input/story.txt`
-- `02-adaptation/adaptation.json`
-- `03-characters/characters.json`
-- `04-role-reference/*.png`
-- `05-storyboard/storyboard.json`
-- `06-images/*.png`
-- `07-audio/*.mp3`
-- `08-subtitles/subtitles.srt`
-- `09-video/output.mp4`
-- `manifest.json`
-- `model-matrix.json`
+最少需要配置：
 
-默认输出目录：
+- `QINIU_API_KEY`
+- `DB_HOST`
+- `DB_PORT`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_NAME`
+
+常用可选项：
+
+- `QINIU_BASE_URL`
+- `APP_BASE_URL`
+- `ALIYUN_OSS_ENABLED`
+- `ALIYUN_OSS_ACCESS_KEY_ID`
+- `ALIYUN_OSS_ACCESS_KEY_SECRET`
+- `ALIYUN_OSS_BUCKET`
+- `ALIYUN_OSS_PUBLIC_BASE_URL`
+
+## 数据与输出
+
+项目数据：
+
+```text
+.data/projects/
+```
+
+项目输出：
 
 ```text
 output/projects/<project-id>/
 ```
 
-Provider 默认值：
+典型产物结构：
 
-- `MAAS_PROVIDER=qiniu` 时默认走 `https://api.qnaigc.com/v1`
-- `MAAS_PROVIDER=sufy` 时默认走 `https://api.sufy.com/aitoken/v1`
+- `01-input/story.txt`
+- `02-adaptation/adaptation.json`
+- `03-characters/characters.json`
+- `04-role-reference/`
+- `05-storyboard/storyboard.json`
+- `06-images/`
+- `07-audio/`
+- `08-subtitles/`
+- `09-video/`
+- `10-video-model/`
+- `manifest.json`
+- `model-matrix.json`
 
-对象存储可选接入阿里云 OSS：
+## 数据库初始化与模型目录
 
-- 开启 `ALIYUN_OSS_ENABLED=true` 后，项目内上传的参考图、生成的角色图、镜头图、音频、视频会在本地落盘后同步上传 OSS。
-- 生成链路里如果素材带有 `publicUrl`，会优先使用 OSS 公网地址，便于 `Sora`、`Kling`、`Vidu` 一类需要公网可访问素材的模型调用。
-- 推荐同时配置 `ALIYUN_OSS_PUBLIC_BASE_URL`，例如 `https://<bucket>.oss-cn-hangzhou.aliyuncs.com`。
+初始化数据库并写入模型目录：
 
-## 模型切换与对比
-
-在项目工作台中，每个阶段都可以切换模型。也可以直接在 `.env` 中修改默认值：
-
-- `QINIU_TEXT_MODEL`
-- `QINIU_TEXT_COMPARE_MODELS`
-- `QINIU_IMAGE_MODEL`
-- `QINIU_IMAGE_COMPARE_MODELS`
-
-文本对比结果会保存在：
-
-```text
-output/runs/<timestamp>/comparisons/text/
+```bash
+npm run db:init
 ```
 
-图像对比结果会保存在：
+模型目录当前不是运行时去七牛接口抓取，而是基于仓库内的种子写入数据库。这样做有两个目的：
 
-```text
-output/runs/<timestamp>/comparisons/image/
+- 避免线上接口波动污染工作台的模型选项。
+- 让模型分类、能力标签、适配族和测试保持一致。
+
+数据库中的 `model_catalog` 目前包含：
+
+- `model_id`
+- `display_name`
+- `provider`
+- `category`
+- `family`
+- `capabilities`
+- `source`
+- `metadata`
+
+## 测试
+
+运行测试：
+
+```bash
+npm test
 ```
 
-## 阶段与模型理解
+当前测试策略不是“mock 一个函数看 1+1=2”，而是小而真实的链路测试：
 
-当前仓库把“业务阶段”和“模型入口”分开处理。现在界面里是按阶段推进的：先输入故事，再执行剧本、角色、分镜、画面与配音、输出合成，最后保留视频模型阶段。
+- 每个模型家族单独一个测试文件。
+- 通过本地 HTTP server 驱动 `QiniuMaaSClient -> adapter -> request -> response parser` 的整条链路。
+- 覆盖文本、语音、Gemini 生图、Kling 生图、Veo 视频、Kling 视频、Vidu 视频、Sora 视频、模型目录写库。
 
-| 流程 | 当前默认调用 | 适合继续对比的模型方向 | 重点观察 |
-| --- | --- | --- | --- |
-| 剧本改编 / 剧情理解 | `openai/gpt-5.4-mini` | GPT-5.4、Gemini 2.5 Pro、MiniMax M 系列 | 结构化输出稳定性、剧情推进、人物关系准确性 |
-| 角色设定 | `openai/gpt-5.4-mini` | GPT-5.4、Gemini 2.5 Pro | 人物标签是否清晰、是否利于后续画面一致性 |
-| 角色首图 | `gemini-2.5-flash-image` | GPT Image 1、Imagen 4、MiniMax image 系列 | 真人感、稳定性、参考复用能力 |
-| 镜头图 / 关键帧 | `gemini-2.5-flash-image` | Imagen 4、Gemini Flash Image、MiniMax image 系列 | 跨场景一致性、风格统一、提示词可控性 |
-| 镜头视频生成 | 预留 `veo-3` 阶段，当前未真正启用 | Sora 2、Veo 3、Runway、Hailuo | 动作自然度、剧情连贯性、成本与速度 |
-| 配音 / 旁白 | 七牛 `/voice/tts` + 音色配置 | GPT-4o mini TTS、Gemini TTS、MiniMax Speech | 中文自然度、情绪、角色区分度 |
+测试文件示例：
 
-## 适合演示的讲法
+- `test/providers.text.openai-gpt54.integration.test.js`
+- `test/providers.speech.qiniu-tts.integration.test.js`
+- `test/providers.image.gemini.integration.test.js`
+- `test/providers.image.kling.integration.test.js`
+- `test/providers.video.veo.integration.test.js`
+- `test/providers.video.kling.integration.test.js`
+- `test/providers.video.vidu.integration.test.js`
+- `test/providers.video.sora.integration.test.js`
+- `test/model-catalog.seed.integration.test.js`
+- `test/model-catalog.write.integration.test.js`
 
-- 剧情改编、角色设定、分镜更适合文本模型。
-- 角色首图和镜头图更适合图像模型，重点看角色一致性和镜头感。
-- 真正连续镜头要靠视频模型，不应该继续伪装成“静帧拼接就是视频生成”。
-- 配音更适合语音模型，重点看情绪和角色区分。
-- 七牛 MAAS/Sufy 在这里承担统一模型接入层，业务代码不用散落地直连不同厂商。
+构建校验：
 
-## 当前工作台逻辑
+```bash
+npm run build
+```
 
-- 左侧是项目列表，不再展示一堆历史 run。
-- 中间是主工作区，顶部阶段标签切换 `剧本 / 主体 / 分镜 / 画面 / 成片`。
-- 每个阶段执行完都能看当前结果，并允许手动修改 `adaptation / characters / storyboard`。
-- 如果你修改上游阶段结果，下游阶段会自动失效，避免拿旧结果误判。
-- 成片页同时保留 `静态合成` 和 `视频生成` 两种执行方式。
+## 适合怎么介绍这个项目
 
-## 协作方式
+一句话版本：
 
-- 需求和改进项放在 GitHub Issues。
-- 具体改动通过分支和 Pull Request 推进。
-- 当前路线图见 [docs/roadmap.md](docs/roadmap.md)。
-- 模型阶段策略见 [docs/model-strategy.md](docs/model-strategy.md)。
+“这是一个接入七牛云 MaaS 的 AI 漫剧工作站，把故事到成片的关键制作节点放进同一个项目工具里。”
+
+更准确一点的版本：
+
+“它不是单一模型 demo，而是一个面向 AI 漫剧生产的项目工作台。文本、图片、语音、视频都通过统一的模型接入层管理，所有中间结果会被保存，方便创作、比对和重跑。”
+
+## 后续重点
+
+- 继续补每个视频模型族的约束测试和失败路径测试。
+- 把 `src/index.js` 的旧 CLI 调用路径进一步收敛到新 adapter 层。
+- 继续清理业务编排层里与模型请求细节耦合的逻辑。
