@@ -55,6 +55,36 @@ CREATE TABLE IF NOT EXISTS ${schema}.jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_project_created_at
   ON ${schema}.jobs(project_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS ${schema}.project_artifacts (
+  project_id TEXT NOT NULL REFERENCES ${schema}.projects(id) ON DELETE CASCADE,
+  artifact_path TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  storage_provider TEXT NOT NULL DEFAULT 'database',
+  public_url TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  body_json JSONB NULL,
+  body_text TEXT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_id, artifact_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_artifacts_project_stage
+  ON ${schema}.project_artifacts(project_id, stage, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ${schema}.project_logs (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES ${schema}.projects(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_logs_project_created_at
+  ON ${schema}.project_logs(project_id, created_at DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS ${schema}.model_catalog (
   model_id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
@@ -96,6 +126,26 @@ COMMENT ON COLUMN ${schema}.jobs.payload IS '任务附加数据';
 COMMENT ON COLUMN ${schema}.jobs.created_at IS '任务创建时间';
 COMMENT ON COLUMN ${schema}.jobs.started_at IS '任务开始时间';
 COMMENT ON COLUMN ${schema}.jobs.finished_at IS '任务结束时间';
+
+COMMENT ON TABLE ${schema}.project_artifacts IS '项目工件表，数据库为元数据与结构化数据真源';
+COMMENT ON COLUMN ${schema}.project_artifacts.project_id IS '所属项目ID';
+COMMENT ON COLUMN ${schema}.project_artifacts.artifact_path IS '工件相对路径';
+COMMENT ON COLUMN ${schema}.project_artifacts.stage IS '工件所属阶段';
+COMMENT ON COLUMN ${schema}.project_artifacts.content_type IS '工件内容类型';
+COMMENT ON COLUMN ${schema}.project_artifacts.storage_provider IS '存储提供方：database/aliyun-oss';
+COMMENT ON COLUMN ${schema}.project_artifacts.public_url IS '对象存储公网地址';
+COMMENT ON COLUMN ${schema}.project_artifacts.metadata IS '工件附加信息';
+COMMENT ON COLUMN ${schema}.project_artifacts.body_json IS '结构化 JSON 数据';
+COMMENT ON COLUMN ${schema}.project_artifacts.body_text IS '纯文本数据';
+COMMENT ON COLUMN ${schema}.project_artifacts.size_bytes IS '工件字节数';
+COMMENT ON COLUMN ${schema}.project_artifacts.created_at IS '创建时间';
+COMMENT ON COLUMN ${schema}.project_artifacts.updated_at IS '更新时间';
+
+COMMENT ON TABLE ${schema}.project_logs IS '项目流水日志表';
+COMMENT ON COLUMN ${schema}.project_logs.project_id IS '所属项目ID';
+COMMENT ON COLUMN ${schema}.project_logs.stage IS '日志阶段';
+COMMENT ON COLUMN ${schema}.project_logs.payload IS '日志内容';
+COMMENT ON COLUMN ${schema}.project_logs.created_at IS '创建时间';
 
 COMMENT ON TABLE ${schema}.model_catalog IS '模型目录表';
 COMMENT ON COLUMN ${schema}.model_catalog.model_id IS '模型ID';

@@ -1,34 +1,28 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { NextResponse } from "next/server";
-import { config } from "../../../../../../src/config.js";
-
-const mimeTypes = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".mp3": "audio/mpeg",
-  ".mp4": "video/mp4",
-  ".ppm": "image/x-portable-pixmap",
-  ".srt": "text/plain; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-};
+import { readProjectArtifact } from "../../../../../../src/project-artifacts.js";
+import { readProjectArtifactBuffer } from "../../../../../../src/object-storage.js";
 
 export async function GET(_request, { params }) {
   try {
     const { projectId, slug = [] } = await params;
-    const safeRoot = path.join(config.projectOutputRoot, projectId);
-    const filePath = path.join(safeRoot, ...slug);
-    if (!filePath.startsWith(safeRoot)) {
-      return NextResponse.json({ message: "非法路径" }, { status: 403 });
+    const relativePath = slug.join("/");
+    const artifact = await readProjectArtifact(projectId, relativePath);
+    if (!artifact) {
+      return NextResponse.json({ message: "工件不存在" }, { status: 404 });
     }
-    const buffer = await fs.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
+
+    if (artifact.publicUrl) {
+      return NextResponse.redirect(artifact.publicUrl, { status: 307 });
+    }
+
+    const { buffer, contentType } = await readProjectArtifactBuffer({
+      projectId,
+      relativePath,
+    });
     return new NextResponse(buffer, {
       status: 200,
       headers: {
-        "Content-Type": mimeTypes[ext] || "application/octet-stream",
+        "Content-Type": contentType || artifact.contentType || "application/octet-stream",
       },
     });
   } catch (error) {

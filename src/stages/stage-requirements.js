@@ -1,28 +1,19 @@
-import path from "node:path";
-import { getMediaWorkbenchPath, getProjectPaths } from "../project-store.js";
-import { readJson } from "../utils.js";
-
-async function readOptionalJson(filePath) {
-  try {
-    return await readJson(filePath);
-  } catch {
-    return null;
-  }
-}
+import { PROJECT_ARTIFACT_PATHS } from "../project-artifact-paths.js";
+import { readProjectJsonArtifact } from "../project-artifacts.js";
+import { readMediaWorkbench } from "../project-store.js";
 
 async function inferStageReadyFromArtifacts(projectId, stage) {
-  const paths = getProjectPaths(projectId);
   if (stage === "adaptation") {
-    return Boolean(await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")));
+    return Boolean(await readProjectJsonArtifact(projectId, PROJECT_ARTIFACT_PATHS.adaptation));
   }
   if (stage === "characters") {
-    return Boolean(await readOptionalJson(path.join(paths.dirs.characters, "characters.json")));
+    return Boolean(await readProjectJsonArtifact(projectId, PROJECT_ARTIFACT_PATHS.characters));
   }
   if (stage === "storyboard") {
-    return Boolean(await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json")));
+    return Boolean(await readProjectJsonArtifact(projectId, PROJECT_ARTIFACT_PATHS.storyboard));
   }
   if (stage === "media") {
-    const workbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
+    const workbench = await readMediaWorkbench(projectId);
     return Boolean(workbench?.shots?.length);
   }
   return false;

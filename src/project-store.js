@@ -1,11 +1,19 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { buildArtifactUrl, resolveArtifactPublicUrl } from "./object-storage.js";
 import { databaseSchema, query } from "./db.js";
+import { PROJECT_ARTIFACT_PATHS, stageArtifactPath } from "./project-artifact-paths.js";
+import {
+  listProjectLogs,
+  projectArtifactExists,
+  readProjectJsonArtifact,
+  readProjectTextArtifact,
+  saveProjectJsonArtifact,
+  saveProjectTextArtifact,
+} from "./project-artifacts.js";
 import { mapMediaWorkbenchUrls, normalizeMediaWorkbench } from "./media-workbench.js";
 import { normalizeVoiceProfile } from "./voice-catalog.js";
-import { ensureDir, makeRunId, readJson, readText, writeJson, writeText } from "./utils.js";
+import { ensureDir, makeRunId } from "./utils.js";
 
 export const stageOrder = [
   "adaptation",
@@ -147,25 +155,11 @@ function referenceTimeValue(item) {
   return Number.isFinite(value) ? value : 0;
 }
 
-async function assetExists(outputDir, item) {
-  if (!item) {
-    return false;
-  }
-  if (item.publicUrl) {
-    return true;
-  }
-  if (!item.path) {
-    return false;
-  }
-  try {
-    await fs.access(path.join(outputDir, item.path));
-    return true;
-  } catch {
-    return false;
-  }
+async function assetExists(projectId, item) {
+  return projectArtifactExists(projectId, item);
 }
 
-async function sanitizeMediaWorkbenchAssets(projectId, paths, workbench) {
+async function sanitizeMediaWorkbenchAssets(projectId, workbench) {
   if (!workbench?.shots?.length) {
     return workbench || { updatedAt: nowIso(), shots: [] };
   }
@@ -176,7 +170,7 @@ async function sanitizeMediaWorkbenchAssets(projectId, paths, workbench) {
   for (const shot of workbench.shots) {
     const referenceImages = [];
     for (const item of shot.reference_images || []) {
-      if (await assetExists(paths.outputDir, item)) {
+      if (await assetExists(projectId, item)) {
         referenceImages.push(item);
       } else {
         changed = true;
@@ -185,7 +179,7 @@ async function sanitizeMediaWorkbenchAssets(projectId, paths, workbench) {
 
     const frameAssets = [];
     for (const item of shot.frame_assets || []) {
-      if (await assetExists(paths.outputDir, item)) {
+      if (await assetExists(projectId, item)) {
         frameAssets.push(item);
       } else {
         changed = true;
@@ -194,15 +188,15 @@ async function sanitizeMediaWorkbenchAssets(projectId, paths, workbench) {
 
     const videoAssets = [];
     for (const item of shot.video_assets || []) {
-      if (await assetExists(paths.outputDir, item)) {
+      if (await assetExists(projectId, item)) {
         videoAssets.push(item);
       } else {
         changed = true;
       }
     }
 
-    const audioAsset = await assetExists(paths.outputDir, shot.audio_asset) ? shot.audio_asset : null;
-    const lipSyncAsset = await assetExists(paths.outputDir, shot.lip_sync_asset) ? shot.lip_sync_asset : null;
+    const audioAsset = await assetExists(projectId, shot.audio_asset) ? shot.audio_asset : null;
+    const lipSyncAsset = await assetExists(projectId, shot.lip_sync_asset) ? shot.lip_sync_asset : null;
     if (shot.audio_asset && !audioAsset) {
       changed = true;
     }
@@ -244,7 +238,12 @@ async function sanitizeMediaWorkbenchAssets(projectId, paths, workbench) {
     : workbench;
 
   if (changed) {
-    await writeJson(getMediaWorkbenchPath(projectId), nextWorkbench);
+    await saveProjectJsonArtifact({
+      projectId,
+      artifactPath: PROJECT_ARTIFACT_PATHS.mediaWorkbench,
+      value: nextWorkbench,
+      stage: "media",
+    });
   }
 
   return nextWorkbench;
@@ -499,12 +498,10 @@ async function readProjectRow(projectId) {
 }
 
 export function getProjectPaths(projectId) {
-  const outputDir = path.join(config.projectOutputRoot, projectId);
+  const outputDir = path.join(config.projectWorkspaceRoot, projectId);
   return {
-    dataDir: path.join(config.projectDataRoot, projectId),
+    dataDir: path.join(config.projectWorkspaceRoot, projectId, ".data"),
     outputDir,
-    manifestPath: path.join(outputDir, "manifest.json"),
-    modelMatrixPath: path.join(outputDir, "model-matrix.json"),
     dirs: {
       logs: path.join(outputDir, "00-logs"),
       input: path.join(outputDir, "01-input"),
@@ -522,8 +519,7 @@ export function getProjectPaths(projectId) {
 }
 
 export function getMediaWorkbenchPath(projectId) {
-  const paths = getProjectPaths(projectId);
-  return path.join(paths.dirs.images, "media-workbench.json");
+  return PROJECT_ARTIFACT_PATHS.mediaWorkbench;
 }
 
 export async function ensureProjectWorkspace(projectId) {
@@ -550,8 +546,14 @@ export async function createProject(name = "点众 AI 真人剧 Demo") {
     stageState: createStageState(),
     currentJobId: null,
   });
-  await ensureProjectWorkspace(projectId);
-  return upsertProject(project);
+  const saved = await upsertProject(project);
+  await saveProjectTextArtifact({
+    projectId,
+    artifactPath: PROJECT_ARTIFACT_PATHS.story,
+    text: "",
+    stage: "input",
+  });
+  return saved;
 }
 
 export async function writeProject(project) {
@@ -582,40 +584,16 @@ export async function listProjects() {
   }));
 }
 
-async function readOptionalJson(filePath) {
-  try {
-    return await readJson(filePath);
-  } catch {
-    return null;
-  }
+async function readOptionalJson(projectId, artifactPath) {
+  return readProjectJsonArtifact(projectId, artifactPath);
 }
 
-async function readOptionalText(filePath) {
-  try {
-    return await readText(filePath);
-  } catch {
-    return "";
-  }
+async function readOptionalText(projectId, artifactPath) {
+  return readProjectTextArtifact(projectId, artifactPath);
 }
 
-async function readOptionalJsonLines(filePath, limit = 200) {
-  const text = await readOptionalText(filePath);
-  if (!text.trim()) {
-    return [];
-  }
-
-  return text
-    .trim()
-    .split("\n")
-    .slice(-limit)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
+async function readOptionalJsonLines(projectId, limit = 200) {
+  return listProjectLogs(projectId, limit);
 }
 
 export async function readJob(jobId) {
@@ -739,7 +717,6 @@ export async function markJobError(jobId, errorMessage) {
 export async function invalidateProject(project, fromStage) {
   const startIndex = fromStage === "story" ? 0 : stageOrder.indexOf(fromStage);
   const affectedStages = fromStage === "story" ? stageOrder : stageOrder.slice(startIndex);
-  await ensureProjectWorkspace(project.id);
 
   if (fromStage === "story") {
     for (const stage of stageOrder) {
@@ -805,8 +782,12 @@ export async function updateProject(projectId, patch) {
   }
 
   if (shouldInvalidateStory) {
-    const paths = await ensureProjectWorkspace(project.id);
-    await writeText(path.join(paths.dirs.input, "story.txt"), `${project.storyText.trim()}\n`);
+    await saveProjectTextArtifact({
+      projectId: project.id,
+      artifactPath: PROJECT_ARTIFACT_PATHS.story,
+      text: project.storyText.trim(),
+      stage: "input",
+    });
     await invalidateProject(project, "story");
     return project;
   }
@@ -830,30 +811,30 @@ export async function updateProject(projectId, patch) {
 
 export async function saveProjectArtifact(projectId, stage, value) {
   const project = await readProject(projectId);
-  const paths = await ensureProjectWorkspace(projectId);
-  const targetMap = {
-    adaptation: path.join(paths.dirs.adaptation, "adaptation.json"),
-    characters: path.join(paths.dirs.characters, "characters.json"),
-    storyboard: path.join(paths.dirs.storyboard, "storyboard.json"),
-  };
+  const targetPath = stageArtifactPath(stage);
 
-  if (!targetMap[stage]) {
+  if (!targetPath) {
     throw new Error(`Stage ${stage} does not support manual save.`);
   }
 
   const artifactValue = stage === "characters"
     ? normalizeCharacterStagePayload(
         value,
-        await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")),
+        await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.adaptation),
       )
     : stage === "storyboard"
       ? normalizeStoryboardPayload(
           value,
-          await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json")),
+          await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.adaptation),
         )
-    : value;
+      : value;
 
-  await writeJson(targetMap[stage], artifactValue);
+  await saveProjectJsonArtifact({
+    projectId,
+    artifactPath: targetPath,
+    value: artifactValue,
+    stage,
+  });
   project.stageState[stage] = {
     status: "done",
     updatedAt: nowIso(),
@@ -875,26 +856,29 @@ export async function saveProjectArtifact(projectId, stage, value) {
 }
 
 export async function readMediaWorkbench(projectId) {
-  const paths = getProjectPaths(projectId);
-  const manifest = await readOptionalJson(paths.manifestPath);
-  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
-  const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  const manifest = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.manifest);
+  const adaptation = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.adaptation);
+  const characters = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.characters);
   const normalizedCharacters = normalizeCharacterStagePayload(characters, adaptation);
-  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
-  const workbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
+  const storyboard = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.storyboard);
+  const workbench = await readOptionalJson(projectId, getMediaWorkbenchPath(projectId));
   const normalizedStoryboard = normalizeStoryboardPayload(storyboard, adaptation);
   return normalizeMediaWorkbench(workbench, normalizedStoryboard, normalizedCharacters, manifest);
 }
 
 export async function saveMediaWorkbench(projectId, value) {
-  const paths = await ensureProjectWorkspace(projectId);
   const normalized = await readMediaWorkbench(projectId);
   const next = {
     ...normalized,
     ...value,
     updatedAt: nowIso(),
   };
-  await writeJson(getMediaWorkbenchPath(projectId), next);
+  await saveProjectJsonArtifact({
+    projectId,
+    artifactPath: getMediaWorkbenchPath(projectId),
+    value: next,
+    stage: "media",
+  });
   return next;
 }
 
@@ -918,20 +902,23 @@ export async function patchMediaShot(projectId, shotId, patch) {
     lip_sync_asset: patch.lip_sync_asset !== undefined ? patch.lip_sync_asset : current.lip_sync_asset,
   };
   workbench.updatedAt = nowIso();
-  await writeJson(getMediaWorkbenchPath(projectId), workbench);
+  await saveProjectJsonArtifact({
+    projectId,
+    artifactPath: getMediaWorkbenchPath(projectId),
+    value: workbench,
+    stage: "media",
+  });
   return workbench;
 }
 
 export async function readProjectDetail(projectId) {
   const project = await readProject(projectId);
-  const paths = getProjectPaths(projectId);
-  const manifest = await readOptionalJson(paths.manifestPath);
-  const modelMatrix = await readOptionalJson(paths.modelMatrixPath);
-  const logs = await readOptionalJsonLines(path.join(paths.dirs.logs, "pipeline.jsonl"));
-  const storyText =
-    project.storyText || (await readOptionalText(path.join(paths.dirs.input, "story.txt")));
-  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
-  const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  const manifest = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.manifest);
+  const modelMatrix = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.modelMatrix);
+  const logs = await readOptionalJsonLines(projectId);
+  const storyText = project.storyText;
+  const adaptation = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.adaptation);
+  const characters = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.characters);
   const normalizedCharacters = normalizeCharacterStagePayload(characters, adaptation);
   normalizedCharacters.characters = normalizedCharacters.characters.map((item) => ({
     ...item,
@@ -945,9 +932,9 @@ export async function readProjectDetail(projectId) {
     ...item,
     reference_images: mapReferenceImages(projectId, item.reference_images),
   }));
-  const storyboard = await readOptionalJson(path.join(paths.dirs.storyboard, "storyboard.json"));
+  const storyboard = await readOptionalJson(projectId, PROJECT_ARTIFACT_PATHS.storyboard);
   const normalizedStoryboard = normalizeStoryboardPayload(storyboard, adaptation);
-  const subtitles = await readOptionalText(path.join(paths.dirs.subtitles, "subtitles.srt"));
+  const subtitles = await readOptionalText(projectId, PROJECT_ARTIFACT_PATHS.subtitles);
   const subjectReferences = (manifest?.subjectReferences || manifest?.roleReferences || []).map((item) => ({
     ...item,
     kind: item.kind || "character",
@@ -975,8 +962,8 @@ export async function readProjectDetail(projectId) {
     audioUrl: shot.audioPath ? `/api/projects/${projectId}/artifacts/${shot.audioPath}` : "",
     segmentUrl: shot.segmentPath ? `/api/projects/${projectId}/artifacts/${shot.segmentPath}` : "",
   }));
-  const rawWorkbench = await readOptionalJson(getMediaWorkbenchPath(projectId));
-  const sanitizedWorkbench = await sanitizeMediaWorkbenchAssets(projectId, paths, rawWorkbench);
+  const rawWorkbench = await readOptionalJson(projectId, getMediaWorkbenchPath(projectId));
+  const sanitizedWorkbench = await sanitizeMediaWorkbenchAssets(projectId, rawWorkbench);
   const mediaWorkbench = mapMediaWorkbenchUrls(
     projectId,
     normalizeMediaWorkbench(

@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { buildArtifactUrl, resolveArtifactPublicUrl } from "./object-storage.js";
+import { readProjectArtifactBuffer } from "./object-storage.js";
 import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
 
 function nowIso() {
@@ -18,15 +18,18 @@ function imageMimeFromPath(filePath) {
   }[ext] || "image/png";
 }
 
-export async function buildReferenceInputs(outputDir, items = []) {
+export async function buildReferenceInputs(projectId, items = []) {
   const results = [];
   for (const item of items) {
     if (!item?.path) {
       continue;
     }
-    const absolutePath = path.join(outputDir, item.path);
-    const buffer = await fs.readFile(absolutePath);
-    const mimeType = imageMimeFromPath(absolutePath);
+    const { buffer } = await readProjectArtifactBuffer({
+      projectId,
+      relativePath: item.path,
+      publicUrl: item.publicUrl || "",
+    });
+    const mimeType = imageMimeFromPath(item.path);
     const base64 = buffer.toString("base64");
     results.push({
       ...item,

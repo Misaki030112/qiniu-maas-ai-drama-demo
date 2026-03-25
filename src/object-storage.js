@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
+import { saveProjectBinaryArtifact, readProjectArtifact } from "./project-artifacts.js";
 import { ensureDir } from "./utils.js";
 
 const mimeTypes = {
@@ -75,6 +76,12 @@ function isAliyunOssEnabled() {
   return truthy(config.objectStorage.enabled) && Boolean(accessKeyId && accessKeySecret && bucket && endpoint);
 }
 
+function assertAliyunOssEnabled() {
+  if (!isAliyunOssEnabled()) {
+    throw new Error("对象存储未配置完成，当前版本要求二进制工件持久化到 OSS。");
+  }
+}
+
 async function uploadToAliyunOss({ projectId, relativePath, buffer, contentType }) {
   const { accessKeyId, accessKeySecret, bucket, objectAcl } = config.objectStorage.aliyun;
   const baseUrl = buildAliyunBaseUrl();
@@ -113,7 +120,10 @@ async function uploadToAliyunOss({ projectId, relativePath, buffer, contentType 
     throw new Error(`上传阿里云 OSS 失败: ${response.status}${errorText ? ` ${errorText}` : ""}`);
   }
 
-  return `${baseUrl}/${encodedObjectKey}`;
+  return {
+    objectKey,
+    publicUrl: `${baseUrl}/${encodedObjectKey}`,
+  };
 }
 
 export function contentTypeFromFilePath(filePath) {
@@ -142,21 +152,92 @@ export async function persistProjectArtifact({
   absolutePath,
   relativePath,
   buffer,
-  contentType = contentTypeFromFilePath(absolutePath),
+  contentType = contentTypeFromFilePath(absolutePath || relativePath),
   generatedAt = "",
+  metadata = {},
+  stage = "",
 }) {
-  await ensureDir(path.dirname(absolutePath));
-  await fs.writeFile(absolutePath, buffer);
-
-  const publicUrl = isAliyunOssEnabled()
-    ? await uploadToAliyunOss({ projectId, relativePath, buffer, contentType })
-    : "";
+  assertAliyunOssEnabled();
+  const upload = await uploadToAliyunOss({ projectId, relativePath, buffer, contentType });
+  const artifact = await saveProjectBinaryArtifact({
+    projectId,
+    artifactPath: relativePath,
+    contentType,
+    publicUrl: upload.publicUrl,
+    storageProvider: "aliyun-oss",
+    sizeBytes: buffer.length,
+    stage,
+    metadata: {
+      ...metadata,
+      generatedAt: generatedAt || metadata.generatedAt || "",
+      objectKey: upload.objectKey,
+      originalPath: absolutePath || "",
+    },
+  });
 
   return {
     path: relativePath,
     url: buildArtifactUrl(projectId, relativePath, generatedAt),
-    publicUrl: resolveArtifactPublicUrl({ projectId, relativePath, generatedAt, publicUrl }),
-    storageProvider: publicUrl ? "aliyun-oss" : "local",
+    publicUrl: resolveArtifactPublicUrl({
+      projectId,
+      relativePath,
+      generatedAt,
+      publicUrl: artifact.publicUrl,
+    }),
+    storageProvider: artifact.storageProvider,
     contentType,
   };
+}
+
+export async function readProjectArtifactBuffer({ projectId, relativePath, publicUrl = "" }) {
+  const artifact = publicUrl ? null : await readProjectArtifact(projectId, relativePath);
+  const effectiveContentType = artifact?.contentType || contentTypeFromFilePath(relativePath);
+
+  if (artifact && artifact.bodyJson !== null) {
+    return {
+      buffer: Buffer.from(`${JSON.stringify(artifact.bodyJson, null, 2)}\n`, "utf8"),
+      contentType: artifact.contentType || "application/json; charset=utf-8",
+    };
+  }
+  if (artifact && artifact.bodyText !== null) {
+    return {
+      buffer: Buffer.from(artifact.bodyText, "utf8"),
+      contentType: artifact.contentType || "text/plain; charset=utf-8",
+    };
+  }
+
+  const url = publicUrl || artifact?.publicUrl || "";
+  if (!url) {
+    throw new Error(`未找到工件: ${projectId}/${relativePath}`);
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`下载工件失败: ${response.status}`);
+  }
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") || effectiveContentType,
+  };
+}
+
+export async function materializeProjectArtifact({
+  projectId,
+  relativePath,
+  targetPath,
+  publicUrl = "",
+}) {
+  try {
+    await fs.access(targetPath);
+    return targetPath;
+  } catch {}
+
+  const { buffer } = await readProjectArtifactBuffer({
+    projectId,
+    relativePath,
+    publicUrl,
+  });
+  await ensureDir(path.dirname(targetPath));
+  await fs.writeFile(targetPath, buffer);
+  return targetPath;
 }

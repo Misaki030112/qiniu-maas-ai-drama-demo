@@ -9,8 +9,6 @@ import {
 } from "./prompts/index.js";
 import {
   ensureDir,
-  readJson,
-  readText,
   runCommand,
   writeJson,
   writeText,
@@ -23,7 +21,14 @@ import {
   createFrameAsset,
   createVideoAsset,
 } from "./media-workbench.js";
-import { contentTypeFromFilePath, persistProjectArtifact } from "./object-storage.js";
+import {
+  contentTypeFromFilePath,
+  materializeProjectArtifact,
+  persistProjectArtifact,
+  readProjectArtifactBuffer,
+} from "./object-storage.js";
+import { PROJECT_ARTIFACT_PATHS } from "./project-artifact-paths.js";
+import { readProjectArtifactPublicUrl, readProjectJsonArtifact, saveProjectJsonArtifact, saveProjectTextArtifact } from "./project-artifacts.js";
 import {
   ensureProjectWorkspace,
   patchMediaShot,
@@ -188,15 +193,32 @@ function imageMimeFromPath(filePath) {
   }[ext] || "image/png";
 }
 
-async function buildSubjectReferenceInputs(paths, items = []) {
+async function resolveProjectArtifactPath(paths, projectId, relativePath, publicUrl = "") {
+  const targetPath = path.join(paths.outputDir, relativePath);
+  return materializeProjectArtifact({
+    projectId,
+    relativePath,
+    publicUrl,
+    targetPath,
+  });
+}
+
+async function readProjectBinaryArtifact(projectId, relativePath, publicUrl = "") {
+  return (await readProjectArtifactBuffer({
+    projectId,
+    relativePath,
+    publicUrl,
+  })).buffer;
+}
+
+async function buildSubjectReferenceInputs(projectId, items = []) {
   const results = [];
   for (const item of items) {
     if (!item?.path) {
       continue;
     }
-    const absolutePath = path.join(paths.outputDir, item.path);
-    const buffer = await fs.readFile(absolutePath);
-    const mimeType = imageMimeFromPath(absolutePath);
+    const buffer = await readProjectBinaryArtifact(projectId, item.path, item.publicUrl || "");
+    const mimeType = imageMimeFromPath(item.path);
     results.push({
       ...item,
       base64: buffer.toString("base64"),
@@ -215,7 +237,7 @@ async function renderSubjectReference({ projectId, client, model, subject, kind,
 
   const imagePath = `${fileStem}.png`;
   const generatedAt = new Date().toISOString();
-  const referenceImages = await buildSubjectReferenceInputs(paths, subject.reference_images || []);
+  const referenceImages = await buildSubjectReferenceInputs(projectId, subject.reference_images || []);
   const request = buildImageRequest({
     model,
     prompt,
@@ -302,29 +324,20 @@ function hasRemoteReferenceUrl(value) {
   }
 }
 
-async function ensureReferencePublicUrls(projectId, outputDir, items = []) {
+async function ensureReferencePublicUrls(projectId, items = []) {
   const results = [];
   for (const item of items) {
     if (!item?.path || hasRemoteReferenceUrl(item.publicUrl) || hasRemoteReferenceUrl(item.url)) {
       results.push(item);
       continue;
     }
-    const absolutePath = path.join(outputDir, item.path);
     try {
-      const buffer = await fs.readFile(absolutePath);
-      const storedAsset = await persistProjectArtifact({
-        projectId,
-        absolutePath,
-        relativePath: item.path,
-        buffer,
-        contentType: contentTypeFromFilePath(absolutePath),
-        generatedAt: item.generatedAt || "",
-      });
+      const publicUrl = await readProjectArtifactPublicUrl(projectId, item.path);
       results.push({
         ...item,
-        url: storedAsset.url || item.url || "",
-        publicUrl: storedAsset.publicUrl || item.publicUrl || "",
-        storageProvider: storedAsset.storageProvider || item.storageProvider || "",
+        url: item.url || "",
+        publicUrl: publicUrl || item.publicUrl || "",
+        storageProvider: publicUrl ? "aliyun-oss" : item.storageProvider || "",
       });
     } catch {
       results.push(item);
@@ -341,7 +354,7 @@ async function createNormalizedVideoReferenceAsset({
   width,
   height,
 }) {
-  const sourcePath = path.join(paths.outputDir, sourceRelativePath);
+  const sourcePath = await resolveProjectArtifactPath(paths, projectId, sourceRelativePath);
   const outputPath = path.join(paths.outputDir, targetRelativePath);
   await ensureDir(path.dirname(outputPath));
   await runCommand(config.ffmpegPath, [
@@ -403,8 +416,8 @@ async function buildMediaReferenceInputs(projectId, projectDetail, paths, shot) 
     seen.add(key);
     deduped.push(item);
   }
-  const withPublicUrls = await ensureReferencePublicUrls(projectId, paths.outputDir, deduped);
-  return buildReferenceInputs(paths.outputDir, withPublicUrls);
+  const withPublicUrls = await ensureReferencePublicUrls(projectId, deduped);
+  return buildReferenceInputs(projectId, withPublicUrls);
 }
 
 function extractSelectedShotMedia(shot) {
@@ -441,15 +454,17 @@ function syncManifestShotsFromWorkbench(manifest, workbench) {
     .filter(Boolean);
 }
 
-async function renderStaticSegmentForShot(paths, shot) {
+async function renderStaticSegmentForShot(projectId, paths, shot) {
   const { selectedFrame } = extractSelectedShotMedia(shot);
   if (!selectedFrame || !shot.audio_asset?.path) {
     throw new Error("当前镜头缺少静帧或配音，无法生成片段。");
   }
   const outputPath = path.join(paths.dirs.video, `${shot.shot_id}.mp4`);
+  const imagePath = await resolveProjectArtifactPath(paths, projectId, selectedFrame.path, selectedFrame.publicUrl || "");
+  const audioPath = await resolveProjectArtifactPath(paths, projectId, shot.audio_asset.path, shot.audio_asset.publicUrl || "");
   await renderSegment({
-    imagePath: path.join(paths.outputDir, selectedFrame.path),
-    audioPath: path.join(paths.outputDir, shot.audio_asset.path),
+    imagePath,
+    audioPath,
     outputPath,
     durationSec: Number(shot.duration_sec || 4),
   });
@@ -652,8 +667,18 @@ async function applyMediaShotAudioToVideoInternal({ project, paths, manifest, sh
     throw new Error("当前镜头还没有可用配音。");
   }
 
-  const sourceVideoPath = path.join(paths.outputDir, selectedVideo.path);
-  const sourceAudioPath = path.join(paths.outputDir, shot.audio_asset.path);
+  const sourceVideoPath = await resolveProjectArtifactPath(
+    paths,
+    project.id,
+    selectedVideo.path,
+    selectedVideo.publicUrl || "",
+  );
+  const sourceAudioPath = await resolveProjectArtifactPath(
+    paths,
+    project.id,
+    shot.audio_asset.path,
+    shot.audio_asset.publicUrl || "",
+  );
   const safeId = shotId.replaceAll("/", "_");
   const outputPath = path.join(paths.dirs.videoModel, `${safeId}-dub-${Date.now()}.mp4`);
   const relativePath = path.relative(paths.outputDir, outputPath);
@@ -787,10 +812,10 @@ async function generateMediaShotVideoInternal({ project, projectDetail, client, 
       }]
     : videoReferenceInputs;
   const firstFrame = resolvedFirstFramePath
-    ? await fs.readFile(path.join(paths.outputDir, resolvedFirstFramePath))
+    ? await readProjectBinaryArtifact(project.id, resolvedFirstFramePath)
     : null;
   const tailFrame = capability.supports_last_frame && resolvedTailFramePath
-    ? await fs.readFile(path.join(paths.outputDir, resolvedTailFramePath))
+    ? await readProjectBinaryArtifact(project.id, resolvedTailFramePath)
     : null;
   const prompt = shot.video_prompt || shot.image_prompt || shot.shot_description || "";
   if (!prompt.trim()) {
@@ -987,21 +1012,19 @@ async function runTextComparisons({ client, stageName, messages, outputDir, mode
   }
 }
 
-async function readOptionalJson(filePath) {
-  try {
-    return await readJson(filePath);
-  } catch {
-    return null;
-  }
-}
-
 async function executeAdaptation(project, client, paths, manifest, onProgress) {
   await reportProgress(onProgress, "正在整理故事并生成剧本工作稿");
-  const storyText = project.storyText.trim() || (await readText(path.join(paths.dirs.input, "story.txt")));
+  const storyText = project.storyText.trim();
   if (!storyText.trim()) {
     throw new Error("请先输入故事文本。");
   }
   await writeText(path.join(paths.dirs.input, "story.txt"), `${storyText.trim()}\n`);
+  await saveProjectTextArtifact({
+    projectId: project.id,
+    artifactPath: PROJECT_ARTIFACT_PATHS.story,
+    text: storyText.trim(),
+    stage: "input",
+  });
   const messages = buildAdaptationMessages(storyText, project.models);
   const adaptation = await saveChatStage({
     client,
@@ -1011,6 +1034,12 @@ async function executeAdaptation(project, client, paths, manifest, onProgress) {
     fileStem: "adaptation",
     logger: manifest.logger,
     step: "adaptation_chat",
+  });
+  await saveProjectJsonArtifact({
+    projectId: project.id,
+    artifactPath: PROJECT_ARTIFACT_PATHS.adaptation,
+    value: adaptation,
+    stage: "adaptation",
   });
   upsertStageRecord(manifest, "adaptation", project.models.adaptation, "02-adaptation/adaptation.json");
   manifest.outputs.adaptation = "02-adaptation/adaptation.json";
@@ -1026,7 +1055,7 @@ async function executeAdaptation(project, client, paths, manifest, onProgress) {
 
 async function analyzeSubjects(project, client, paths, manifest, onProgress) {
   await reportProgress(onProgress, "正在分析主体");
-  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  const adaptation = await readProjectJsonArtifact(project.id, PROJECT_ARTIFACT_PATHS.adaptation);
   if (!adaptation) {
     throw new Error("请先完成剧本阶段。");
   }
@@ -1044,7 +1073,12 @@ async function analyzeSubjects(project, client, paths, manifest, onProgress) {
     normalizeCharacterStagePayload(payload, adaptation),
     adaptation,
   );
-  await writeJson(path.join(paths.dirs.characters, "characters.json"), subjectPayload);
+  await saveProjectJsonArtifact({
+    projectId: project.id,
+    artifactPath: PROJECT_ARTIFACT_PATHS.characters,
+    value: subjectPayload,
+    stage: "characters",
+  });
   upsertStageRecord(manifest, "characters", project.models.characters, "03-characters/characters.json");
   manifest.outputs.characters = "03-characters/characters.json";
   return subjectPayload;
@@ -1055,9 +1089,9 @@ async function executeCharacters(project, client, paths, manifest, onProgress) {
 }
 
 async function renderAllSubjectReferencesForProject(project, client, paths, manifest, onProgress) {
-  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  const adaptation = await readProjectJsonArtifact(project.id, PROJECT_ARTIFACT_PATHS.adaptation);
   const payload = normalizeCharacterStagePayload(
-    await readOptionalJson(path.join(paths.dirs.characters, "characters.json")),
+    await readProjectJsonArtifact(project.id, PROJECT_ARTIFACT_PATHS.characters),
     adaptation,
   );
 
@@ -1094,8 +1128,8 @@ async function renderAllSubjectReferencesForProject(project, client, paths, mani
 
 async function executeStoryboard(project, client, paths, manifest, onProgress) {
   await reportProgress(onProgress, "正在拆解分镜");
-  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
-  const characters = await readOptionalJson(path.join(paths.dirs.characters, "characters.json"));
+  const adaptation = await readProjectJsonArtifact(project.id, PROJECT_ARTIFACT_PATHS.adaptation);
+  const characters = await readProjectJsonArtifact(project.id, PROJECT_ARTIFACT_PATHS.characters);
   if (!adaptation || !characters) {
     throw new Error("请先完成角色设定阶段。");
   }
@@ -1110,7 +1144,12 @@ async function executeStoryboard(project, client, paths, manifest, onProgress) {
     step: "storyboard_chat",
   });
   const normalizedStoryboard = normalizeStoryboardPayload(storyboard, adaptation);
-  await writeJson(path.join(paths.dirs.storyboard, "storyboard.json"), normalizedStoryboard);
+  await saveProjectJsonArtifact({
+    projectId: project.id,
+    artifactPath: PROJECT_ARTIFACT_PATHS.storyboard,
+    value: normalizedStoryboard,
+    stage: "storyboard",
+  });
   upsertStageRecord(manifest, "storyboard", project.models.storyboard, "05-storyboard/storyboard.json");
   manifest.outputs.storyboard = "05-storyboard/storyboard.json";
   await runTextComparisons({
@@ -1181,7 +1220,12 @@ async function executeOutput(project, paths, manifest, onProgress) {
       missingShots.push(shot.shot_id);
       continue;
     }
-    selectedVideoPaths.push(path.join(paths.outputDir, selectedVideo.path));
+    selectedVideoPaths.push(await resolveProjectArtifactPath(
+      paths,
+      project.id,
+      selectedVideo.path,
+      selectedVideo.publicUrl || "",
+    ));
   }
 
   if (missingShots.length) {
@@ -1265,7 +1309,12 @@ async function executeVideo(project, client, paths, manifest, onProgress) {
     if (!selectedVideo?.path) {
       throw new Error(`镜头 ${shot.shot_id} 视频生成后未找到结果文件。`);
     }
-    renderedVideoPaths.push(path.join(paths.outputDir, selectedVideo.path));
+    renderedVideoPaths.push(await resolveProjectArtifactPath(
+      paths,
+      project.id,
+      selectedVideo.path,
+      selectedVideo.publicUrl || "",
+    ));
   }
 
   const finalVideoPath = path.join(paths.dirs.videoModel, "output.mp4");
@@ -1351,9 +1400,9 @@ export async function regenerateSubjectReference(projectId, { kind, key }) {
   const project = await readProject(projectId);
   const paths = await ensureProjectWorkspace(projectId);
   const client = createMaaSClient();
-  const adaptation = await readOptionalJson(path.join(paths.dirs.adaptation, "adaptation.json"));
+  const adaptation = await readProjectJsonArtifact(projectId, PROJECT_ARTIFACT_PATHS.adaptation);
   const payload = normalizeCharacterStagePayload(
-    await readOptionalJson(path.join(paths.dirs.characters, "characters.json")),
+    await readProjectJsonArtifact(projectId, PROJECT_ARTIFACT_PATHS.characters),
     adaptation,
   );
 

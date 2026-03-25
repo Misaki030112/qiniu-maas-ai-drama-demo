@@ -1,5 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { appendProjectLog } from "./project-artifacts.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -73,11 +72,7 @@ function sanitizeLogValue(value) {
   return value;
 }
 
-export async function createPipelineLogger({ projectId, stage, outputDir }) {
-  const logDir = path.join(outputDir, "00-logs");
-  const logPath = path.join(logDir, "pipeline.jsonl");
-  await fs.mkdir(logDir, { recursive: true });
-
+export async function createPipelineLogger({ projectId, stage }) {
   async function log(entry) {
     const payload = sanitizeLogValue({
       ts: nowIso(),
@@ -85,7 +80,7 @@ export async function createPipelineLogger({ projectId, stage, outputDir }) {
       stage,
       ...entry,
     });
-    await fs.appendFile(logPath, `${JSON.stringify(payload)}\n`);
+    await appendProjectLog(projectId, stage, payload);
     console.log(formatConsoleLine(payload));
     return payload;
   }
@@ -129,7 +124,7 @@ export async function createPipelineLogger({ projectId, stage, outputDir }) {
   }
 
   return {
-    logPath,
+    logPath: "",
     log,
     measure,
   };

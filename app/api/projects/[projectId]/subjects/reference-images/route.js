@@ -1,8 +1,6 @@
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { contentTypeFromFilePath, persistProjectArtifact } from "../../../../../../src/object-storage.js";
-import { ensureProjectWorkspace, getProjectPaths } from "../../../../../../src/project-store.js";
-import { ensureDir } from "../../../../../../src/utils.js";
 
 function sanitizeName(value) {
   return String(value || "subject")
@@ -24,22 +22,16 @@ export async function POST(request, { params }) {
       return NextResponse.json({ message: "缺少上传文件" }, { status: 400 });
     }
 
-    await ensureProjectWorkspace(projectId);
-    const paths = getProjectPaths(projectId);
-    const targetDir = path.join(paths.dirs.input, "reference-images");
-    await ensureDir(targetDir);
-
     const ext = path.extname(file.name || "").toLowerCase() || ".png";
     const fileName = `${kind}-${name}-${Date.now()}${ext}`;
-    const absolutePath = path.join(targetDir, fileName);
     const buffer = Buffer.from(await file.arrayBuffer());
-    const relativePath = path.relative(paths.outputDir, absolutePath);
+    const relativePath = path.posix.join("01-input", "reference-images", fileName);
     const stored = await persistProjectArtifact({
       projectId,
-      absolutePath,
       relativePath,
       buffer,
-      contentType: contentTypeFromFilePath(absolutePath),
+      contentType: contentTypeFromFilePath(relativePath),
+      stage: "input",
     });
     return NextResponse.json({
       path: relativePath,

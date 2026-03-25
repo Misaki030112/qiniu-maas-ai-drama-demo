@@ -1,18 +1,9 @@
 import { config } from "../config.js";
-import { getProjectPaths } from "../project-store.js";
-import { readJson, writeJson } from "../utils.js";
-
-async function readOptionalJson(filePath) {
-  try {
-    return await readJson(filePath);
-  } catch {
-    return null;
-  }
-}
+import { PROJECT_ARTIFACT_PATHS } from "../project-artifact-paths.js";
+import { readProjectJsonArtifact, saveProjectJsonArtifact } from "../project-artifacts.js";
 
 export async function loadManifest(projectId, project) {
-  const paths = getProjectPaths(projectId);
-  return (await readOptionalJson(paths.manifestPath)) || {
+  return (await readProjectJsonArtifact(projectId, PROJECT_ARTIFACT_PATHS.manifest)) || {
     projectId,
     projectName: project.name,
     startedAt: new Date().toISOString(),
@@ -34,33 +25,41 @@ export function upsertStageRecord(manifest, stage, model, output) {
 }
 
 export async function saveManifest(projectId, manifest) {
-  const paths = getProjectPaths(projectId);
-  await writeJson(paths.manifestPath, manifest);
+  await saveProjectJsonArtifact({
+    projectId,
+    artifactPath: PROJECT_ARTIFACT_PATHS.manifest,
+    value: manifest,
+    stage: "manifest",
+  });
 }
 
 export async function saveModelMatrix(project, manifest) {
-  const paths = getProjectPaths(project.id);
-  await writeJson(paths.modelMatrixPath, {
-    provider: config.strategy.provider,
-    baseUrl: config.qiniu.baseUrl,
-    primary: {
-      adaptation: project.models.adaptation,
-      characters: project.models.characters,
-      storyboard: project.models.storyboard,
-      roleImage: project.models.roleImage,
-      shotImage: project.models.shotImage,
-      shotVideo: project.models.shotVideo,
-      voice: {
-        narrator: config.qiniu.voices.narrator,
-        female: config.qiniu.voices.female,
-        male: config.qiniu.voices.male,
+  await saveProjectJsonArtifact({
+    projectId: project.id,
+    artifactPath: PROJECT_ARTIFACT_PATHS.modelMatrix,
+    stage: "model-matrix",
+    value: {
+      provider: config.strategy.provider,
+      baseUrl: config.qiniu.baseUrl,
+      primary: {
+        adaptation: project.models.adaptation,
+        characters: project.models.characters,
+        storyboard: project.models.storyboard,
+        roleImage: project.models.roleImage,
+        shotImage: project.models.shotImage,
+        shotVideo: project.models.shotVideo,
+        voice: {
+          narrator: config.qiniu.voices.narrator,
+          female: config.qiniu.voices.female,
+          male: config.qiniu.voices.male,
+        },
       },
+      comparisons: {
+        text: config.qiniu.compareModels.text,
+        image: config.qiniu.compareModels.image,
+      },
+      renderStrategy: manifest.renderStrategy,
+      recommendations: config.strategy.recommendations,
     },
-    comparisons: {
-      text: config.qiniu.compareModels.text,
-      image: config.qiniu.compareModels.image,
-    },
-    renderStrategy: manifest.renderStrategy,
-    recommendations: config.strategy.recommendations,
   });
 }
