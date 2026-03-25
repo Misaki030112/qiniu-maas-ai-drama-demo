@@ -175,9 +175,12 @@ export async function ensureSchema() {
         pool = new Pool(databaseConfig());
       }
       const client = await pool.connect();
+      const schema = databaseSchema();
       try {
-        await client.query(createSchemaSql(databaseSchema()));
+        await client.query("SELECT pg_advisory_lock(hashtext($1))", [schema]);
+        await client.query(createSchemaSql(schema));
       } finally {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [schema]).catch(() => {});
         client.release();
       }
     })();
