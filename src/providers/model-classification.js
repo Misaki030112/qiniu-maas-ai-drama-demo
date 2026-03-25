@@ -12,6 +12,14 @@ const TEXT_MODEL_PATTERNS = [
   /longcat/i,
 ];
 
+const KLING_IMAGE_MODELS = new Set([
+  "kling-v1",
+  "kling-v1-5",
+  "kling-v2",
+  "kling-v2-1",
+  "kling-image-o1",
+]);
+
 export const MODEL_CATEGORY = {
   TEXT: "text",
   IMAGE: "image",
@@ -76,7 +84,7 @@ export function inferModelCategory(modelId) {
     || value.includes("image-preview")
     || value.includes("image-01")
     || value.startsWith("kling-image-")
-    || /^kling-v(1|2)/.test(value)
+    || KLING_IMAGE_MODELS.has(value)
   ) {
     return MODEL_CATEGORY.IMAGE;
   }
@@ -94,7 +102,7 @@ export function inferModelFamily(modelId, category = inferModelCategory(modelId)
   if (category === MODEL_CATEGORY.IMAGE) {
     if (value.startsWith("gemini-")) return "gemini-image";
     if (value === "kling-image-o1") return "kling-image-o1";
-    if (value.startsWith("kling-")) return "kling-image";
+    if (KLING_IMAGE_MODELS.has(value)) return "kling-image";
     if (value.startsWith("gpt-image")) return "openai-image";
     if (value.startsWith("imagen")) return "imagen-image";
     if (value.startsWith("minimax-image")) return "minimax-image";

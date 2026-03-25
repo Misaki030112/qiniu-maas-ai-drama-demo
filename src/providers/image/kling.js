@@ -1,7 +1,15 @@
 import { toPublicReferenceUrl } from "../reference-media.js";
 
+const KLING_IMAGE_MODELS = new Set([
+  "kling-v1",
+  "kling-v1-5",
+  "kling-v2",
+  "kling-v2-1",
+  "kling-image-o1",
+]);
+
 export function isKlingImageModel(model) {
-  return String(model || "").startsWith("kling-");
+  return KLING_IMAGE_MODELS.has(String(model || ""));
 }
 
 export function isKlingOmniImageModel(model) {
