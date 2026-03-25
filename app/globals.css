@@ -1215,7 +1215,7 @@ audio {
 
 .studio-loading-mask {
   position: fixed;
-  top: 18px;
+  top: 88px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
