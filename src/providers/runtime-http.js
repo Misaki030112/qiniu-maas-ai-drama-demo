@@ -6,17 +6,28 @@ function extractProviderMessage(payload) {
     || "";
 }
 
-export function normalizeProviderError(message, fallback) {
+function compactPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return "";
+  }
+}
+
+export function normalizeProviderError(message, fallback, payload = null, status = 0) {
   const text = String(message || fallback || "").trim();
   const noChannelMatch = text.match(/no available channels for model\s+([^\s(]+)/i);
   if (noChannelMatch) {
     return `当前接入点未开通模型 ${noChannelMatch[1]}，请切换模型或更换接入点。原始错误：${text}`;
   }
   if (/^kling model error$/i.test(text)) {
-    return `上游 Kling 服务返回通用失败，当前无法从响应中判断更细原因。原始错误：${text}`;
+    return `上游 Kling 服务返回通用失败。HTTP ${status || "?"}，响应：${compactPayload(payload) || text}`;
   }
   if (/^generate image failed$/i.test(text)) {
-    return `上游图片服务返回通用失败，当前无法从响应中判断更细原因。原始错误：${text}`;
+    return `上游图片服务返回通用失败。HTTP ${status || "?"}，响应：${compactPayload(payload) || text}`;
   }
   return text || fallback;
 }
@@ -61,6 +72,8 @@ export async function requestJson(runtime, request) {
     throw new Error(normalizeProviderError(
       extractProviderMessage(payload),
       request.errorFallback || `Request failed with ${response.status}`,
+      payload,
+      response.status,
     ));
   }
   return payload;
