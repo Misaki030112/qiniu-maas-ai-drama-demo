@@ -6,7 +6,7 @@ import {
   buildAdaptationMessages,
   buildCharacterMessages,
   buildStoryboardMessages,
-} from "./pipeline/prompts.js";
+} from "./prompts/index.js";
 import {
   ensureDir,
   escapeSubtitlePath,
