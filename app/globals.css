@@ -491,7 +491,6 @@ video {
   margin-bottom: 12px;
 }
 
-.studio-side__home,
 .studio-side__toggle {
   display: inline-flex;
   align-items: center;
@@ -502,11 +501,6 @@ video {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
-}
-
-.studio-side__home svg {
-  width: 18px;
-  height: 18px;
 }
 
 .studio-side__toggle {
