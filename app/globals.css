@@ -64,15 +64,19 @@ video {
 }
 
 .app-rail__brand,
-.app-rail__footer {
+.app-rail__link {
   width: 42px;
   height: 42px;
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 14px;
+}
+
+.app-rail__brand {
   background: rgba(147, 239, 59, 0.16);
   color: var(--accent);
-  font-weight: 800;
+  border: 1px solid rgba(147, 239, 59, 0.18);
 }
 
 .app-rail__nav {
@@ -81,27 +85,21 @@ video {
 }
 
 .app-rail__link {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 14px;
   border: 1px solid var(--line);
   background: transparent;
   color: var(--muted);
-  font-weight: 700;
+}
+
+.app-rail__brand svg,
+.app-rail__link svg {
+  width: 18px;
+  height: 18px;
 }
 
 .app-rail__link.active {
   background: rgba(147, 239, 59, 0.12);
   color: var(--accent);
   border-color: rgba(147, 239, 59, 0.3);
-}
-
-.app-rail__footer {
-  margin-top: auto;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
 }
 
 .projects-home {
