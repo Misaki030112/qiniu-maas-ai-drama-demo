@@ -666,6 +666,7 @@ export function MediaWorkbenchPanel({
             <label className="studio-field">
               <span>图片模型</span>
               <select value={models.shotImage || ""} onChange={(event) => onChangeModels({ shotImage: event.target.value })}>
+                <option value="">请选择数据库中的模型</option>
                 {modelOptions.shotImage.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </label>
@@ -756,6 +757,7 @@ export function MediaWorkbenchPanel({
             <label className="studio-field">
               <span>视频模型</span>
               <select value={models.shotVideo || ""} onChange={(event) => onChangeModels({ shotVideo: event.target.value })}>
+                <option value="">请选择数据库中的模型</option>
                 {modelOptions.shotVideo.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </label>

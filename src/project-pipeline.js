@@ -1917,7 +1917,34 @@ async function inferStageReadyFromArtifacts(projectId, stage) {
   return false;
 }
 
+function requiredModelsForStage(stage) {
+  return {
+    adaptation: ["adaptation", "characters"],
+    characters: ["characters"],
+    storyboard: ["storyboard"],
+    media: ["shotImage"],
+    output: [],
+    video: ["shotVideo"],
+  }[stage] || [];
+}
+
+function ensureStageModelsConfigured(project, stage) {
+  const missing = requiredModelsForStage(stage).filter((key) => !String(project.models?.[key] || "").trim());
+  if (!missing.length) {
+    return;
+  }
+  const labels = {
+    adaptation: "剧本模型",
+    characters: "主体分析模型",
+    storyboard: "分镜模型",
+    shotImage: "镜头图片模型",
+    shotVideo: "视频模型",
+  };
+  throw new Error(`当前阶段缺少模型配置：${missing.map((key) => labels[key] || key).join("、")}`);
+}
+
 export async function assertExecutable(project, stage) {
+  ensureStageModelsConfigured(project, stage);
   const dependencies = {
     adaptation: [],
     characters: ["adaptation"],

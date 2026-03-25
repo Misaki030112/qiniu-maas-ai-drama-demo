@@ -53,12 +53,12 @@ function createStageState() {
 
 export function createDefaultModels() {
   return {
-    adaptation: config.qiniu.models.adaptation,
-    characters: config.qiniu.models.characters,
-    storyboard: config.qiniu.models.storyboard,
-    roleImage: config.qiniu.models.roleImage,
-    shotImage: config.qiniu.models.shotImage,
-    shotVideo: config.qiniu.models.shotVideo,
+    adaptation: "",
+    characters: "",
+    storyboard: "",
+    roleImage: "",
+    shotImage: "",
+    shotVideo: "",
     scriptRatio: "9:16",
     scriptStyle: "写实",
     scriptMode: "生图转视频",

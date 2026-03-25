@@ -355,38 +355,59 @@ function uniqueStrings(items = []) {
   return [...new Set(items.filter((item) => typeof item === "string" && item.trim()))];
 }
 
-function buildFallbackModelOptions(currentModels = {}) {
-  return {
-    adaptation: uniqueStrings([currentModels.adaptation]),
-    characters: uniqueStrings([currentModels.characters]),
-    storyboard: uniqueStrings([currentModels.storyboard]),
-    roleImage: uniqueStrings([currentModels.roleImage]),
-    shotImage: uniqueStrings([currentModels.shotImage]),
-    shotVideo: uniqueStrings([currentModels.shotVideo]),
-  };
-}
-
-function buildModelOptions(modelCatalog, currentModels = {}) {
-  const fallback = buildFallbackModelOptions(currentModels);
-  const byCapability = (capability, currentValue) => {
+function buildModelOptions(modelCatalog) {
+  const byCapability = (capability) => {
     const items = modelCatalog
       .filter((item) => item.capabilities?.includes(capability))
       .map((item) => item.modelId);
-    return uniqueStrings([currentValue, ...items]);
+    return uniqueStrings(items);
   };
 
   if (!modelCatalog?.length) {
-    return fallback;
+    return {
+      adaptation: [],
+      characters: [],
+      storyboard: [],
+      roleImage: [],
+      shotImage: [],
+      shotVideo: [],
+    };
   }
 
   return {
-    adaptation: byCapability("script", currentModels.adaptation),
-    characters: byCapability("subject_analysis", currentModels.characters),
-    storyboard: byCapability("storyboard", currentModels.storyboard),
-    roleImage: byCapability("subject_reference", currentModels.roleImage),
-    shotImage: byCapability("shot_image", currentModels.shotImage),
-    shotVideo: byCapability("video_generation", currentModels.shotVideo),
+    adaptation: byCapability("script"),
+    characters: byCapability("subject_analysis"),
+    storyboard: byCapability("storyboard"),
+    roleImage: byCapability("subject_reference"),
+    shotImage: byCapability("shot_image"),
+    shotVideo: byCapability("video_generation"),
   };
+}
+
+function requiredModelsForStage(stage) {
+  return {
+    adaptation: ["adaptation", "characters"],
+    characters: ["characters"],
+    storyboard: ["storyboard"],
+    media: ["shotImage"],
+    output: [],
+    video: ["shotVideo"],
+  }[stage] || [];
+}
+
+function stageModelLabel(key) {
+  return {
+    adaptation: "剧本模型",
+    characters: "主体分析模型",
+    storyboard: "分镜模型",
+    roleImage: "角色参考图模型",
+    shotImage: "镜头图片模型",
+    shotVideo: "视频模型",
+  }[key] || key;
+}
+
+function findMissingStageModels(stage, models) {
+  return requiredModelsForStage(stage).filter((key) => !String(models?.[key] || "").trim());
 }
 
 function RatioPreview({ icon }) {
@@ -1162,7 +1183,7 @@ export function ProjectWorkbench({ projectId }) {
   }, [project?.id, project?.currentJob?.id, project?.currentJob?.status]);
 
   const currentKindConfig = subjectKinds.find((item) => item.id === subjectKind) || subjectKinds[0];
-  const modelOptions = useMemo(() => buildModelOptions(modelCatalog, models), [modelCatalog, models]);
+  const modelOptions = useMemo(() => buildModelOptions(modelCatalog), [modelCatalog]);
   const subjectItems = useMemo(
     () => charactersDraft?.[currentKindConfig.key] || [],
     [charactersDraft, currentKindConfig.key],
@@ -1262,6 +1283,10 @@ export function ProjectWorkbench({ projectId }) {
   function runStage(stage) {
     startTransition(async () => {
       try {
+        const missingModels = findMissingStageModels(stage, models);
+        if (missingModels.length) {
+          throw new Error(`当前阶段缺少模型配置：${missingModels.map(stageModelLabel).join("、")}`);
+        }
         setLocalBusyText(stage === "adaptation" ? "正在整理剧本并分析主体" : "正在提交任务");
         await persistBase();
         const res = await fetch(`/api/projects/${projectId}/execute`, {
@@ -2188,6 +2213,7 @@ export function ProjectWorkbench({ projectId }) {
                 <label className="studio-field">
                   <span>剧本模型</span>
                   <select value={models.adaptation || ""} onChange={(event) => setModels((current) => ({ ...current, adaptation: event.target.value }))}>
+                    <option value="">请选择数据库中的模型</option>
                     {modelOptions.adaptation.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
@@ -2243,12 +2269,14 @@ export function ProjectWorkbench({ projectId }) {
                 <label className="studio-field">
                   <span>主体分析模型</span>
                   <select value={models.characters || ""} onChange={(event) => setModels((current) => ({ ...current, characters: event.target.value }))}>
+                    <option value="">请选择数据库中的模型</option>
                     {modelOptions.characters.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
                 <label className="studio-field">
                   <span>参考图模型</span>
                   <select value={models.roleImage || ""} onChange={(event) => setModels((current) => ({ ...current, roleImage: event.target.value }))}>
+                    <option value="">请选择数据库中的模型</option>
                     {modelOptions.roleImage.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
@@ -2401,6 +2429,7 @@ export function ProjectWorkbench({ projectId }) {
                 <label className="studio-field">
                   <span>分镜模型</span>
                   <select value={models.storyboard || ""} onChange={(event) => setModels((current) => ({ ...current, storyboard: event.target.value }))}>
+                    <option value="">请选择数据库中的模型</option>
                     {modelOptions.storyboard.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
@@ -2493,6 +2522,7 @@ export function ProjectWorkbench({ projectId }) {
                 <label className="studio-field">
                   <span>视频模型</span>
                   <select value={models.shotVideo || ""} onChange={(event) => setModels((current) => ({ ...current, shotVideo: event.target.value }))}>
+                    <option value="">请选择数据库中的模型</option>
                     {modelOptions.shotVideo.map((option) => <option key={option} value={option}>{option}</option>)}
                   </select>
                 </label>
