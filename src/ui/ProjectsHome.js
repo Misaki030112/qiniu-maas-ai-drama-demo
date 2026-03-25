@@ -3,9 +3,39 @@
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 
+function ProjectCardPreview({ project, index }) {
+  const assets = (project.previewAssets || []).slice(0, 3);
+  if (!assets.length) {
+    return (
+      <div className="project-card__stack project-card__stack--empty">
+        <div className="project-card__paper project-card__paper--back" />
+        <div className="project-card__paper project-card__paper--mid" />
+        <div className="project-card__paper project-card__paper--front">
+          <div className="project-card__paper-placeholder">{project.name.slice(0, 2) || "项目"}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="project-card__stack">
+      {[0, 1, 2].map((slot) => {
+        const asset = assets[slot] || null;
+        const layerClass = slot === 0 ? "project-card__paper--front" : slot === 1 ? "project-card__paper--mid" : "project-card__paper--back";
+        return (
+          <div key={asset?.path || `${project.id}-${slot}`} className={`project-card__paper ${layerClass}`}>
+            {asset ? <img src={asset.url} alt={`${project.name} 预览 ${slot + 1}`} /> : <div className="project-card__paper-placeholder">素材 {slot + 1}</div>}
+          </div>
+        );
+      })}
+      <div className="project-card__folder-tab">项目 {index + 1}</div>
+    </div>
+  );
+}
+
 export function ProjectsHome() {
   const [projects, setProjects] = useState([]);
-  const [name, setName] = useState("点众 AI 真人剧 Demo");
+  const [name, setName] = useState("AI 漫剧项目");
   const [activeTab] = useState("mine");
   const [message, setMessage] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -68,8 +98,7 @@ export function ProjectsHome() {
           <Link key={project.id} href={`/projects/${project.id}`} className="project-card">
             <div className="project-card__cover">
               <div className="project-card__cover-glow" />
-              <div className="project-card__cover-title">{project.name.slice(0, 8)}</div>
-              <div className="project-card__chapter">项目 {index + 1}</div>
+              <ProjectCardPreview project={project} index={index} />
             </div>
             <div className="project-card__body">
               <strong>{project.name}</strong>

@@ -2075,7 +2075,7 @@ export function ProjectWorkbench({ projectId }) {
           <Link href="/projects" className="workspace-back">返回</Link>
           <div className="workspace-title">
             <h1>{project.name}</h1>
-            <span>点众 AI 真人剧 Demo</span>
+            <span>AI 漫剧工作站</span>
           </div>
         </div>
         <nav className="studio-tabs">
@@ -2111,6 +2111,14 @@ export function ProjectWorkbench({ projectId }) {
       >
         <aside className={sideCollapsed ? "studio-side studio-side--collapsed" : "studio-side"}>
           <div className="studio-side__tools">
+            <Link href="/projects" className="studio-side__home" title="返回项目首页" aria-label="返回项目首页">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 10.5 12 3l9 7.5" />
+                <path d="M5.5 9.5V20h13V9.5" />
+                <path d="M9.5 20v-5.5h5V20" />
+              </svg>
+            </Link>
+            {!sideCollapsed ? <span className="studio-side__label">项目目录</span> : null}
             <button
               type="button"
               className="studio-side__toggle"
@@ -2120,7 +2128,6 @@ export function ProjectWorkbench({ projectId }) {
             >
               {sideCollapsed ? "›" : "‹"}
             </button>
-            {!sideCollapsed ? <span className="studio-side__label">章节目录</span> : null}
           </div>
           {!sideCollapsed ? <SideList tab={tab} project={project} /> : null}
         </aside>

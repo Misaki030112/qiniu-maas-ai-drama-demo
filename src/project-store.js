@@ -582,12 +582,49 @@ export async function listProjects() {
     `,
   );
 
-  return result.rows.map((row) => ({
+  const projects = result.rows.map((row) => ({
     id: row.id,
     name: row.name,
     currentJobId: row.current_job_id || null,
     updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
     createdAt: row.created_at?.toISOString?.() || row.created_at,
+  }));
+
+  const previews = await Promise.all(
+    projects.map(async (project) => {
+      const assets = await query(
+        `
+          SELECT artifact_path, public_url, updated_at
+          FROM ${schema}.project_artifacts
+          WHERE project_id = $1
+            AND public_url <> ''
+            AND content_type LIKE 'image/%'
+          ORDER BY
+            CASE
+              WHEN artifact_path LIKE '06-images/%' THEN 0
+              WHEN artifact_path LIKE '04-role-reference/%' THEN 1
+              ELSE 2
+            END,
+            updated_at DESC
+          LIMIT 3
+        `,
+        [project.id],
+      );
+      return {
+        projectId: project.id,
+        previewAssets: assets.rows.map((row) => ({
+          path: row.artifact_path,
+          url: row.public_url,
+          updatedAt: row.updated_at?.toISOString?.() || row.updated_at || nowIso(),
+        })),
+      };
+    }),
+  );
+
+  const previewMap = new Map(previews.map((item) => [item.projectId, item.previewAssets]));
+  return projects.map((project) => ({
+    ...project,
+    previewAssets: previewMap.get(project.id) || [],
   }));
 }
 
