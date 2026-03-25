@@ -5,6 +5,7 @@
   "scripts": {
     "legacy:demo": "node scripts/legacy-demo.js",
     "db:init": "node scripts/init-db.js",
+    "test:assets:sync": "node scripts/sync-live-test-assets.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

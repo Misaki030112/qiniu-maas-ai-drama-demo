@@ -166,24 +166,29 @@ npm run db:init
 npm test
 ```
 
-当前测试策略不是“mock 一个函数看 1+1=2”，而是小而真实的链路测试：
+当前测试直接使用真实 `QINIU_API_KEY` 调用线上接口，不再使用本地 mock server：
 
-- 每个模型家族单独一个测试文件。
-- 通过本地 HTTP server 驱动 `QiniuMaaSClient -> adapter -> request -> response parser` 的整条链路。
-- 覆盖文本、语音、Gemini 生图、Kling 生图、Veo 视频、Kling 视频、Vidu 视频、Sora 视频、模型目录写库。
+- 文本测试会真实调用七牛文本模型并校验结构化 JSON。
+- 语音测试会真实调用 `/voice/tts` 并校验返回音频。
+- 图片测试会使用 OSS 上的真实参考图调用图片模型并校验返回二进制图片。
+- 视频测试会读取 OSS 上的真实首帧图片，真实创建远程任务并校验状态查询链路。
+- 模型目录写库测试仍保留本地数据库逻辑校验。
+
+如需重传测试图片到 OSS：
+
+```bash
+npm run test:assets:sync
+```
 
 测试文件示例：
 
-- `test/providers.text.openai-gpt54.integration.test.js`
-- `test/providers.speech.qiniu-tts.integration.test.js`
-- `test/providers.image.gemini.integration.test.js`
-- `test/providers.image.kling.integration.test.js`
-- `test/providers.video.veo.integration.test.js`
-- `test/providers.video.kling.integration.test.js`
-- `test/providers.video.vidu.integration.test.js`
-- `test/providers.video.sora.integration.test.js`
+- `test/providers.text.live.integration.test.js`
+- `test/providers.speech.live.integration.test.js`
+- `test/providers.image.live.integration.test.js`
+- `test/providers.video.live.integration.test.js`
 - `test/model-catalog.seed.integration.test.js`
 - `test/model-catalog.write.integration.test.js`
+- `test/model-catalog.read.integration.test.js`
 
 构建校验：
 
