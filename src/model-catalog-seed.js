@@ -79,6 +79,7 @@ const imageModels = [
   "gpt-image-1",
   "imagen-4",
   "gemini-2.5-flash-image",
+  "gemini-3.0-pro-image-preview",
   "gemini-3.1-flash-image-preview",
   "minimax-image-01",
   "kling-v1",
