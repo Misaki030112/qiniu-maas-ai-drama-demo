@@ -10,13 +10,13 @@
 
 ## 阶段拆分
 
-| 流程 | 当前默认调用 | 候选方向 | 说明 |
+| 流程 | 当前已适配方向 | 候选方向 | 说明 |
 | --- | --- | --- | --- |
-| 剧本改编 / 剧情理解 | `openai/gpt-5.4-mini` | GPT-5.4、Gemini 2.5 Pro、MiniMax M 系列 | 负责把原始剧情整理成结构化故事骨架 |
-| 角色设定 | `openai/gpt-5.4-mini` | GPT-5.4、Gemini 2.5 Pro | 负责补齐角色人格、外观、连续性提示词 |
-| 角色首图 | `gemini-2.5-flash-image` | GPT Image 1、Imagen 4、MiniMax image 系列 | 负责形成可反复复用的角色参考图 |
-| 镜头图 / 关键帧 | `gemini-2.5-flash-image` | Imagen 4、Gemini Flash Image、MiniMax image 系列 | 负责单镜头画面与关键帧 |
-| 镜头视频生成 | `veo-3` 模型位已预留 | Sora 2、Veo 3、Runway、Hailuo | 负责真正的连续镜头，不应和静帧合成混淆 |
+| 剧本改编 / 剧情理解 | GPT / Gemini / Qwen / DeepSeek 等文本模型 | GPT-5.4、Gemini 2.5 Pro、MiniMax M 系列 | 负责把原始剧情整理成结构化故事骨架 |
+| 角色设定 | GPT / Gemini / Qwen / DeepSeek 等文本模型 | GPT-5.4、Gemini 2.5 Pro | 负责补齐角色人格、外观、连续性提示词 |
+| 角色首图 | Imagen / Gemini Image / Kling Image / GPT Image | GPT Image 1、Imagen 4、MiniMax image 系列 | 负责形成可反复复用的角色参考图 |
+| 镜头图 / 关键帧 | Imagen / Gemini Image / Kling Image / GPT Image | Imagen 4、Gemini Flash Image、MiniMax image 系列 | 负责单镜头画面与关键帧 |
+| 镜头视频生成 | Veo / Sora / Kling / Vidu | Sora 2、Veo 3、Runway、Hailuo | 负责真正的连续镜头，不应和静帧合成混淆 |
 | 配音 / 旁白 | 七牛 `/voice/tts` | GPT-4o mini TTS、Gemini TTS、MiniMax Speech | 负责多角色对白和旁白 |
 
 ## 当前限制

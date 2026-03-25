@@ -1,11 +1,9 @@
 {
   "name": "ai-drama-demo",
   "version": "1.0.0",
-  "description": "Qiniu MaaS / SUFY powered AI live-action drama demo",
-  "main": "src/index.js",
+  "description": "AI 漫剧工作站，当前仅支持七牛云 MaaS",
   "scripts": {
-    "demo": "node src/index.js",
-    "pipeline": "node src/index.js",
+    "legacy:demo": "node scripts/legacy-demo.js",
     "db:init": "node scripts/init-db.js",
     "dev": "next dev",
     "build": "next build",

@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { config } from "./config.js";
-import { createMaaSClient } from "./maas-client.js";
+import { config } from "../src/config.js";
+import { createMaaSClient } from "../src/maas-client.js";
 import {
   buildAdaptationMessages,
   buildCharacterMessages,
   buildStoryboardMessages,
-} from "./prompts/index.js";
+} from "../src/prompts/index.js";
 import {
   ensureDir,
   escapeSubtitlePath,
@@ -16,8 +16,8 @@ import {
   secondsToSrtTime,
   writeJson,
   writeText,
-} from "./utils.js";
-import { defaultVoicePresetForGender, normalizeVoiceProfile } from "./voice-catalog.js";
+} from "../src/utils.js";
+import { defaultVoicePresetForGender, normalizeVoiceProfile } from "../src/voice-catalog.js";
 
 function parseArgs(argv) {
   const args = {};

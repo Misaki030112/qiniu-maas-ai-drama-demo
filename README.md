@@ -43,8 +43,10 @@
 - `app/`: 页面和 API
 - `src/project-pipeline.js`: 项目执行编排
 - `src/providers/`: 模型调用适配层
+- `src/prompts/`: 按阶段拆分的提示词构建器
 - `src/model-catalog.js`: 模型目录入库与读取
 - `src/model-catalog-seed.js`: 七牛 MaaS 模型种子
+- `scripts/`: 数据初始化和历史脚本工具
 - `test/`: 按模型家族拆分的集成测试
 
 ## 模型接入层
@@ -80,12 +82,6 @@ npm run dev
 
 ```text
 http://localhost:3000/projects
-```
-
-保留了旧 CLI 入口，便于跑离线链路：
-
-```bash
-npm run demo
 ```
 
 ## 必要环境变量
@@ -205,8 +201,16 @@ npm run build
 
 “它不是单一模型 demo，而是一个面向 AI 漫剧生产的项目工作台。文本、图片、语音、视频都通过统一的模型接入层管理，所有中间结果会被保存，方便创作、比对和重跑。”
 
+## 历史脚本
+
+仓库里仍保留了一条离线演示脚本链路，但它已经迁到 `scripts/legacy-demo.js`，不再作为产品主入口：
+
+```bash
+npm run legacy:demo
+```
+
 ## 后续重点
 
 - 继续补每个视频模型族的约束测试和失败路径测试。
-- 把 `src/index.js` 的旧 CLI 调用路径进一步收敛到新 adapter 层。
 - 继续清理业务编排层里与模型请求细节耦合的逻辑。
+- 继续收缩历史脚本与工作台主链路之间的重复实现。
